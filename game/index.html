@@ -3,17 +3,134 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Coral City Heat — an original open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1420; font-family: "Segoe UI", system-ui, sans-serif; }
+  #game { position: fixed; inset: 0; }
+  #game canvas { display: block; }
+  .hidden { display: none !important; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; }
+  #topbar { position: absolute; top: 14px; right: 18px; text-align: right; text-shadow: 0 2px 6px rgba(0,0,0,.65); }
+  #stars { font-size: 30px; letter-spacing: 4px; color: #ffd23e; line-height: 1; min-height: 32px; }
+  #stars .off { color: rgba(255,255,255,.28); }
+  #money { font-size: 26px; font-weight: 700; color: #7dff8a; margin-top: 2px; }
+  #clock { font-size: 13px; color: #cfe6ff; opacity: .85; }
+  #healthwrap { position: absolute; right: 18px; top: 108px; width: 190px; }
+  .barlabel { font-size: 11px; letter-spacing: 2px; opacity: .9; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+  .bar { height: 12px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; width: 100%; transition: width .18s ease; }
+  #healthbar > div { background: linear-gradient(90deg, #ff5f4d, #ffb03a); }
+  #bustwrap { margin-top: 8px; }
+  #bustbar > div { background: linear-gradient(90deg, #4da3ff, #d6ecff); width: 0%; }
+
+  #objective { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); max-width: 560px; text-align: center;
+    background: rgba(8,14,24,.62); border: 1px solid rgba(255,210,62,.55); border-radius: 8px; padding: 9px 18px; }
+  #objective .obj-title { color: #ffd23e; font-weight: 700; letter-spacing: 1px; font-size: 14px; text-transform: uppercase; }
+  #objective .obj-text { font-size: 15px; margin-top: 2px; }
+
+  #phone { position: absolute; right: 18px; bottom: 210px; width: 250px; background: rgba(10,16,26,.82);
+    border: 1px solid rgba(140,200,255,.4); border-radius: 12px; padding: 10px 12px; opacity: 0; transition: opacity .3s; }
+  #phone.show { opacity: 1; }
+  #phone .from { color: #8cc8ff; font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+  #phone .msg { font-size: 14px; margin-top: 3px; line-height: 1.35; }
+
+  #banner { position: absolute; top: 34%; left: 50%; transform: translate(-50%,-50%); text-align: center; opacity: 0; transition: opacity .35s; }
+  #banner.show { opacity: 1; }
+  #banner .big { font-size: 52px; font-weight: 800; letter-spacing: 3px; color: #ffd23e; text-shadow: 0 4px 18px rgba(0,0,0,.8); }
+  #banner .sub { font-size: 20px; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+
+  #minimap-wrap { position: absolute; left: 18px; bottom: 18px; width: 188px; }
+  #minimap { width: 188px; height: 188px; border-radius: 10px; border: 2px solid rgba(255,255,255,.55); background: #12202f; display: block; }
+  #speedo { position: absolute; right: 22px; bottom: 22px; text-align: right; text-shadow: 0 2px 6px rgba(0,0,0,.7); }
+  #speedo .num { font-size: 44px; font-weight: 800; }
+  #speedo .unit { font-size: 14px; letter-spacing: 2px; opacity: .85; }
+  #prompt { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); background: rgba(8,14,24,.75);
+    border: 1px solid rgba(255,255,255,.45); padding: 8px 16px; border-radius: 20px; font-size: 16px; }
+  #prompt b { color: #ffd23e; }
+  #hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 26px; color: #ffdf6b; opacity: 0; }
+  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 18px; color: rgba(255,255,255,.85); text-shadow: 0 1px 3px #000; }
+
+  /* ---------- overlays ---------- */
+  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
+    background: radial-gradient(ellipse at 50% 35%, rgba(255,145,60,.28), rgba(6,10,18,.92) 70%); color: #fff; text-align: center; z-index: 10; padding: 20px; }
+  .screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd23e; text-shadow: 0 6px 24px rgba(0,0,0,.75); }
+  .screen h1 span { color: #ff7a59; }
+  .screen .tag { font-size: 17px; color: #d9ecff; max-width: 620px; line-height: 1.5; margin: 14px 0 6px; }
+  .screen .controls { font-size: 14px; color: #a9c6e2; line-height: 1.7; margin: 12px 0 20px; }
+  .screen .controls b { color: #fff; }
+  .btn { pointer-events: auto; cursor: pointer; background: linear-gradient(180deg, #ffb03a, #ff7a59); color: #20130a; border: none;
+    font-size: 20px; font-weight: 800; letter-spacing: 1px; padding: 13px 42px; border-radius: 30px; margin: 5px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  .btn:hover { filter: brightness(1.1); }
+  .btn.ghost { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.5); }
+  #end-screen { background: rgba(10,4,4,.88); }
+  #end-screen h1 { color: #ff5147; }
+  #pause-screen { background: rgba(6,10,18,.78); }
+  #pause-screen h1 { font-size: 40px; color: #fff; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
+<div id="game"></div>
+
+<div id="hud" class="hidden">
+  <div id="objective"><div class="obj-title" id="obj-title">Free roam</div><div class="obj-text" id="obj-text">Explore Coral City.</div></div>
+  <div id="topbar">
+    <div id="stars"></div>
+    <div id="money">$0</div>
+    <div id="clock">Coral City</div>
+  </div>
+  <div id="healthwrap">
+    <div class="barlabel">HEALTH</div>
+    <div class="bar" id="healthbar"><div></div></div>
+    <div id="bustwrap" class="hidden">
+      <div class="barlabel">BUSTED</div>
+      <div class="bar" id="bustbar"><div></div></div>
+    </div>
+  </div>
+  <div id="phone"><div class="from" id="phone-from">UNKNOWN</div><div class="msg" id="phone-msg"></div></div>
+  <div id="banner"><div class="big" id="banner-big"></div><div class="sub" id="banner-sub"></div></div>
+  <div id="minimap-wrap"><canvas id="minimap" width="188" height="188"></canvas></div>
+  <div id="speedo" class="hidden"><span class="num" id="speed-num">0</span> <span class="unit">KM/H</span></div>
+  <div id="prompt" class="hidden"></div>
+  <div id="crosshair">+</div>
+  <div id="hitmarker">✕</div>
+</div>
+
+<div id="start-screen" class="screen">
+  <h1>CORAL CITY <span>HEAT</span></h1>
+  <p class="tag">Marco Reyes just stepped off the bus with empty pockets and one phone number.
+    Coral City — palms, marinas and money that moves after dark — rewards drivers who deliver
+    and punishes drivers who get caught. Five jobs stand between Marco and a reputation.</p>
+  <p class="controls">
+    <b>WASD</b> move / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> sprint<br>
+    <b>E</b> enter / exit car &nbsp;·&nbsp; <b>Space</b> handbrake &nbsp;·&nbsp; <b>F</b> or <b>Click</b> punch / shoot<br>
+    <b>Esc</b> pause &nbsp;·&nbsp; Stars bring police — break their line of sight to cool down.
+  </p>
+  <div>
+    <button class="btn" id="btn-start">START NEW GAME</button>
+    <button class="btn ghost hidden" id="btn-continue">CONTINUE</button>
+  </div>
+</div>
+
+<div id="pause-screen" class="screen hidden">
+  <h1>PAUSED</h1>
+  <p class="tag" id="pause-stats"></p>
+  <div>
+    <button class="btn" id="btn-resume">RESUME</button>
+    <button class="btn ghost" id="btn-quit">SAVE &amp; TITLE</button>
+  </div>
+</div>
+
+<div id="end-screen" class="screen hidden">
+  <h1 id="end-title">BUSTED</h1>
+  <p class="tag" id="end-text"></p>
+  <button class="btn" id="btn-respawn">CONTINUE</button>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
