@@ -1,14 +1,16 @@
-// Coral City Heat — boot and the living loop. This file owns the player: walking
-// with a third-person camera, driving with a chase camera, fists and the pistol,
-// entering and stealing cars, getting busted and wasted, the save file, and the
-// deterministic ?shot= poses the screenshots are taken from. The city, traffic,
-// pedestrians, police and story live in their own modules and meet here.
+// Coral City Heat v2 — boot and the living loop. This file owns the player:
+// walking with a third-person camera, driving with a chase camera, fists and
+// the pistol, entering and stealing cars, the rival courier, the ten hidden
+// golden cassettes, getting busted and wasted, the CITY CLEARED screen, the
+// save file, and the deterministic ?shot= poses the screenshots are taken
+// from. The city, traffic, pedestrians, police, story and sound live in
+// their own modules and meet here.
 
 import * as THREE from 'three';
 import { mulberry32, clamp, turnToward, angleDelta } from './rng.js';
-import { createCity, collideCircle, LANDMARKS, CITY_EDGE, SHORE_Z } from './city.js';
+import { createCity, collideCircle, LANDMARKS, CITY_EDGE, SHORE_Z, districtAt, ROADS } from './city.js';
 import { createTraffic, createParked, stepTraffic, spinWheels, createCarMesh } from './vehicles.js';
-import { createPeds, stepPeds, knockDown, scarePeds } from './peds.js';
+import { createPeds, stepPeds, knockDown, scarePeds, createFigure } from './peds.js';
 import { createPolice, CRIMES } from './police.js';
 import { createMissions } from './missions.js';
 import { createPlayerMesh } from './player.js';
@@ -22,11 +24,11 @@ const seed = Number.parseInt(params.get('seed') ?? '1', 10) || 1;
 const rng = mulberry32(seed * 31337 + 7);
 
 // ---------------------------------------------------------------- renderer
+// No shadow maps: every vehicle and figure carries a blob shadow, which
+// keeps headless screenshot capture and low-end machines equally smooth.
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('game').appendChild(renderer.domElement);
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -35,19 +37,28 @@ window.addEventListener('resize', () => {
 });
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
 const input = createInput(renderer.domElement);
 const hud = createHud();
 const audio = createAudio();
 
 // ---------------------------------------------------------------- world
-const { colliders } = createCity(scene, rng);
+const city = createCity(scene, rng);
+const colliders = city.colliders;
 const traffic = createTraffic(scene, rng, 14);
 const parked = createParked(scene, rng, 16);
-const peds = createPeds(scene, rng, 24);
+const peds = createPeds(scene, rng, 26);
 const police = createPolice(scene);
 const playerMesh = createPlayerMesh();
 scene.add(playerMesh.group);
+
+// Two waiting figures make the taxi job's pickup and drop read as places.
+for (const spot of [LANDMARKS.taxiPickup, LANDMARKS.taxiDrop]) {
+  const figure = createFigure(rng);
+  figure.position.set(spot.x + 2.5, 0.24, spot.z + 2.5);
+  figure.rotation.y = -0.7;
+  scene.add(figure);
+}
 
 // Mission marker: a pillar of gold light plus a ring on the ground.
 const markerGroup = new THREE.Group();
@@ -77,20 +88,44 @@ function dropCash(x, z, amount) {
   pickups.push({ mesh, amount, spin: Math.random() * 6 });
 }
 
+// ------------------------------------------------------- hidden collectibles
+// Ten golden cassettes, tucked at street corners and landmarks across all
+// four districts. Each one found is +$150 and a line on the HUD counter.
+const COLLECTIBLE_SPOTS = [
+  { x: 10, z: -10 }, { x: -74, z: 74 }, { x: 86, z: -86 }, { x: -166, z: 10 },
+  { x: 14, z: 186 }, { x: 166, z: -74 }, { x: -14, z: -166 }, { x: 74, z: 166 },
+  { x: -148, z: -148 }, { x: 170, z: 170 },
+];
+const collectibleGeo = new THREE.BoxGeometry(0.72, 0.5, 0.18);
+const collectibleMat = new THREE.MeshBasicMaterial({ color: 0xffc93e });
+const collectibles = COLLECTIBLE_SPOTS.map((spot, i) => {
+  const mesh = new THREE.Mesh(collectibleGeo, collectibleMat);
+  mesh.position.set(spot.x, 0.9, spot.z);
+  scene.add(mesh);
+  return { id: i, x: spot.x, z: spot.z, mesh, found: false };
+});
+function refreshCollectibleHud() {
+  hud.setCollectibles(collectibles.filter((c) => c.found).length, collectibles.length);
+}
+
 // ---------------------------------------------------------------- player state
-const SAVE_KEY = 'coral-city-heat-save-v1';
+const SAVE_KEY = 'coral-city-heat-save-v2';
 const player = {
   x: LANDMARKS.start.x, z: LANDMARKS.start.z, heading: Math.PI,
   hp: 100, money: 120, speed: 0,
   onFoot: true, car: null, hasGun: false,
   lastHurtAt: -99, dead: false,
 };
+const stats = { earned: 0, jobsDone: 0, playSeconds: 0, bustedCount: 0, wastedCount: 0 };
 let camYaw = Math.PI;
 let camPitch = 0.24;
-let mode = 'title'; // title | play | pause | ended
+let mode = 'title'; // title | play | pause | ended | clear
 let time = 0;
 let crimeCooldowns = {};
 let endKind = null;
+let rival = null;
+let rivalBumps = 0;
+let rivalBumpAt = -99;
 
 function commitCrime(kind, seen = true) {
   const now = time;
@@ -104,6 +139,8 @@ function saveGame() {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       money: player.money, hp: player.hp, hasGun: player.hasGun,
       mission: missions.index, x: player.x, z: player.z,
+      collectibles: collectibles.filter((c) => c.found).map((c) => c.id),
+      stats,
     }));
   } catch { /* private mode: play without a save */ }
 }
@@ -118,7 +155,12 @@ function loadSave() {
 const missions = createMissions({
   phone: (from, msg) => hud.phone(from, msg),
   banner: (big, sub) => hud.banner(big, sub),
-  pay: (amount) => { player.money += amount; hud.setMoney(player.money); saveGame(); },
+  pay: (amount) => {
+    player.money += amount;
+    stats.earned += amount;
+    hud.setMoney(player.money);
+    saveGame();
+  },
   sfx: (name) => {
     if (name === 'win') audio.sting(true);
     else if (name === 'pickup') audio.pickup();
@@ -139,7 +181,7 @@ const missions = createMissions({
     return best;
   },
   spawnFinalCar: () => {
-    const mesh = createCarMesh(0xb03030, 'civilian');
+    const mesh = createCarMesh(0xb03030, 'civilian', 'convertible');
     mesh.position.set(-152, 0, -138);
     mesh.rotation.y = Math.PI / 2;
     scene.add(mesh);
@@ -151,7 +193,33 @@ const missions = createMissions({
     parked.push(car);
     return car;
   },
-  onStoryComplete: () => saveGame(),
+  spawnRivalCar: () => {
+    // A purple Suntail that runs the grid like traffic, only faster and
+    // with somewhere to be. It lives in its own one-car fleet for stepping.
+    const mesh = createCarMesh(0x9b59b6, 'civilian', 'sedan');
+    scene.add(mesh);
+    rival = {
+      mesh, kind: 'rival', name: 'Rival Suntail', type: 'sedan',
+      axis: 'x', dir: 1, line: 0, along: clamp(player.x + 70, -CITY_EDGE, CITY_EDGE),
+      speed: 10, cruise: 11.5, heading: Math.PI / 2, radius: 2.3,
+      parked: false, stolen: false, occupied: false, honkAt: 0,
+      get x() { return mesh.position.x; }, get z() { return mesh.position.z; },
+    };
+    rivalBumps = 0;
+    return rival;
+  },
+  onJobComplete: (jobIndex) => {
+    stats.jobsDone = jobIndex + 1;
+    if (jobIndex === 6 && rival) {
+      scene.remove(rival.mesh);
+      rival = null;
+    }
+    saveGame();
+  },
+  onStoryComplete: () => {
+    saveGame();
+    showCityCleared();
+  },
 });
 
 // ---------------------------------------------------------------- cars
@@ -181,6 +249,29 @@ function enterCar(car) {
   camYaw = car.heading;
 }
 
+/** Re-derive a traffic car's grid state from where it actually stopped.
+ *  While the player drives a traffic car, its mesh moves freely but its
+ *  axis/line/along still describe the road it was stolen from — on exit,
+ *  stepTraffic would lerp it back across the map toward that stale line.
+ *  Snapping the grid state to the exit position lets it rejoin traffic
+ *  from the street it is really on. */
+function resyncTrafficCar(car) {
+  const alongX = Math.abs(Math.sin(car.heading)) >= Math.abs(Math.cos(car.heading));
+  const nearestRoad = (v) => ROADS.reduce((b, r) => (Math.abs(r - v) < Math.abs(b - v) ? r : b), ROADS[0]);
+  if (alongX) {
+    car.axis = 'x';
+    car.line = nearestRoad(car.z);
+    car.along = clamp(car.x, -CITY_EDGE, CITY_EDGE);
+    car.dir = Math.sin(car.heading) >= 0 ? 1 : -1;
+  } else {
+    car.axis = 'z';
+    car.line = nearestRoad(car.x);
+    car.along = clamp(car.z, -CITY_EDGE, CITY_EDGE);
+    car.dir = Math.cos(car.heading) >= 0 ? 1 : -1;
+  }
+  car.speed = 0;
+}
+
 function exitCar() {
   const car = player.car;
   if (!car) return;
@@ -188,6 +279,7 @@ function exitCar() {
   player.car = null;
   car.occupied = false;
   car.speed = 0;
+  if (car.kind === 'traffic') resyncTrafficCar(car);
   const sideX = Math.cos(car.heading);
   const sideZ = -Math.sin(car.heading);
   player.x = car.x + sideX * 2.4;
@@ -226,7 +318,9 @@ function driveCar(dt) {
   player.speed = car.speed;
 
   // Car versus car: a shove, a crunch, and paperwork with the police.
-  for (const other of [...traffic, ...parked, ...police.cops, ...police.roadblock]) {
+  const others = [...traffic, ...parked, ...police.cops, ...police.roadblock];
+  if (rival) others.push(rival);
+  for (const other of others) {
     if (other === car || other.occupied) continue;
     const dx = other.x - car.x;
     const dz = other.z - car.z;
@@ -240,7 +334,15 @@ function driveCar(dt) {
         audio.crash(0.8);
         hurtPlayer(3);
         if (other.kind === 'cop') commitCrime('hitCop');
-        else commitCrime('hitAndRunCar');
+        else if (other.kind === 'rival') {
+          commitCrime('bumpRival');
+          if (time - rivalBumpAt > 1.6) {
+            rivalBumpAt = time;
+            rivalBumps += 1;
+            hud.hitmark();
+            hud.phone('DEX', rivalBumps >= 2 ? 'He is spinning out — package dropped!' : 'One more hit like that and he drops it!');
+          }
+        } else commitCrime('hitAndRunCar');
         car.speed *= 0.45;
       } else {
         car.speed *= 0.8;
@@ -255,7 +357,6 @@ function driveCar(dt) {
         knockDown(ped);
         commitCrime('hitPed');
         audio.crash(0.5);
-        hurtPlayer(0);
         if (!ped.cashDropped && Math.random() < 0.55) {
           ped.cashDropped = true;
           dropCash(ped.x + 1, ped.z + 1, 10 + Math.floor(Math.random() * 40));
@@ -294,7 +395,6 @@ function walkPlayer(dt) {
   const fixed = collideCircle(colliders, player.x, player.z, 0.55);
   player.x = clamp(fixed.x, -CITY_EDGE - 8, CITY_EDGE + 8);
   player.z = clamp(fixed.z, -CITY_EDGE - 8, SHORE_Z + 22);
-  // Cars are solid too — and a moving one is dangerous.
   for (const car of [...traffic, ...parked, ...police.cops]) {
     const dx = player.x - car.x;
     const dz = player.z - car.z;
@@ -313,6 +413,7 @@ function walkPlayer(dt) {
   playerMesh.group.position.set(player.x, 0.24, player.z);
   playerMesh.group.rotation.y = player.heading;
   playerMesh.update(dt, moving ? speed : 0);
+  if (moving && playerMesh.stepped) audio.step();
 }
 
 function knockPlayerBack(dx, dz) {
@@ -345,7 +446,6 @@ function combat(dt) {
     audio.shot();
     commitCrime('shoot');
     scarePeds(peds, player.x, player.z, 15);
-    // Hitscan: the nearest ped or car inside a long, narrow cone.
     let best = null;
     let bestD = 46;
     for (const ped of peds) {
@@ -404,6 +504,11 @@ function startRun(fromSave) {
     player.hasGun = !!save.hasGun;
     player.x = save.x ?? LANDMARKS.start.x;
     player.z = save.z ?? LANDMARKS.start.z;
+    Object.assign(stats, save.stats || {});
+    for (const c of collectibles) {
+      c.found = (save.collectibles || []).includes(c.id);
+      c.mesh.visible = !c.found;
+    }
     missions.startAt(save.mission ?? 0);
   } else {
     player.money = 120;
@@ -411,20 +516,32 @@ function startRun(fromSave) {
     player.hasGun = false;
     player.x = LANDMARKS.start.x;
     player.z = LANDMARKS.start.z;
+    Object.assign(stats, { earned: 0, jobsDone: 0, playSeconds: 0, bustedCount: 0, wastedCount: 0 });
+    for (const c of collectibles) { c.found = false; c.mesh.visible = true; }
     missions.startAt(0);
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
   }
   player.onFoot = true;
   player.car = null;
   player.dead = false;
+  player.heading = Math.PI;
+  camYaw = Math.PI;
+  crimeCooldowns = {}; // a fresh run must not inherit the last run's crime throttle
   police.clear();
+  if (rival) { scene.remove(rival.mesh); rival = null; }
   playerMesh.gun.visible = player.hasGun;
+  playerMesh.group.visible = true;
+  playerMesh.group.position.set(player.x, 0.24, player.z);
   hud.setMoney(player.money);
+  refreshCollectibleHud();
+  hud.setMusic(audio.muted);
   hud.show();
   document.getElementById('start-screen').classList.add('hidden');
   document.getElementById('end-screen').classList.add('hidden');
+  document.getElementById('clear-screen').classList.add('hidden');
   mode = 'play';
   audio.unlock();
+  audio.startMusic(); // the Start button click is the unlocking gesture
   if (!shotName) input.lock();
 }
 
@@ -433,6 +550,8 @@ function endRun(kind) {
   mode = 'ended';
   endKind = kind;
   player.dead = kind === 'wasted';
+  if (kind === 'busted') stats.bustedCount += 1;
+  else stats.wastedCount += 1;
   input.unlock();
   const title = document.getElementById('end-title');
   const text = document.getElementById('end-text');
@@ -440,19 +559,22 @@ function endRun(kind) {
     const fine = Math.min(player.money, 100 + police.wanted.stars * 60);
     player.money -= fine;
     title.textContent = 'BUSTED';
-    text.textContent = `Coral City PD walks you out of the station $${fine} lighter. The jobs remember who delivers — get back to work.`;
+    text.textContent = `Coral City PD walks you out of the station $${fine} lighter. Your current job is still waiting — pick it up from the checkpoint.`;
     audio.sting(false);
   } else {
     const bill = Math.min(player.money, 150);
     player.money -= bill;
     title.textContent = 'WASTED';
-    text.textContent = `You wake up at Coral General with a $${bill} bill and a new respect for traffic. The city is still out there.`;
+    text.textContent = `You wake up at Coral General with a $${bill} bill and a new respect for traffic. Your current job is still waiting.`;
     audio.sting(false);
   }
   hud.setMoney(player.money);
+  saveGame();
   document.getElementById('end-screen').classList.remove('hidden');
 }
 
+/** BUSTED/WASTED restart: back in the world at the station or hospital,
+ *  heat cleared, health restored, current job kept as the checkpoint. */
 function respawn() {
   if (player.car) exitCar();
   if (endKind === 'busted') {
@@ -471,12 +593,34 @@ function respawn() {
   if (!shotName) input.lock();
 }
 
+function showCityCleared() {
+  if (mode !== 'play') return;
+  mode = 'clear';
+  input.unlock();
+  audio.fanfare();
+  const mins = Math.floor(stats.playSeconds / 60);
+  const secs = Math.floor(stats.playSeconds % 60);
+  document.getElementById('clear-stats').innerHTML =
+    `Jobs completed: <b>8 / 8</b> · Cash on hand: <b>$${player.money.toLocaleString()}</b> · ` +
+    `Total earned: <b>$${stats.earned.toLocaleString()}</b><br>` +
+    `Golden cassettes: <b>${collectibles.filter((c) => c.found).length} / 10</b> · ` +
+    `Time in the city: <b>${mins}m ${secs}s</b> · Busted ${stats.bustedCount}× · Wasted ${stats.wastedCount}×`;
+  document.getElementById('clear-screen').classList.remove('hidden');
+}
+
 // ---------------------------------------------------------------- UI wiring
 const saveAtStart = loadSave();
 if (saveAtStart) document.getElementById('btn-continue').classList.remove('hidden');
 document.getElementById('btn-start').addEventListener('click', () => startRun(false));
 document.getElementById('btn-continue').addEventListener('click', () => startRun(true));
 document.getElementById('btn-respawn').addEventListener('click', respawn);
+document.getElementById('btn-freeroam').addEventListener('click', () => {
+  document.getElementById('clear-screen').classList.add('hidden');
+  mode = 'play';
+  hud.banner('FREE ROAM', 'Coral City is yours — the streets are not done with you');
+  if (!shotName) input.lock();
+});
+document.getElementById('btn-restart').addEventListener('click', () => startRun(false));
 document.getElementById('btn-resume').addEventListener('click', () => {
   document.getElementById('pause-screen').classList.add('hidden');
   mode = 'play';
@@ -493,7 +637,7 @@ document.addEventListener('pointerlockchange', () => {
   if (mode === 'play' && !input.locked && !shotName) {
     mode = 'pause';
     document.getElementById('pause-stats').textContent =
-      `Cash $${player.money.toLocaleString()} · ${missions.done ? 'Story complete — free roam' : missions.objective().title}`;
+      `Cash $${player.money.toLocaleString()} · Cassettes ${collectibles.filter((c) => c.found).length}/10 · ${missions.done ? 'Story complete — free roam' : missions.objective().title}`;
     document.getElementById('pause-screen').classList.remove('hidden');
   }
 });
@@ -504,9 +648,14 @@ function poseShot() {
   startRun(false);
   hud.show();
   if (shotName === 'cover') {
+    // Hero vista: Marco on a Downtown street, towers and signs behind him,
+    // the marina road running south. Lupe's first call is on the phone.
     player.x = 26; player.z = 10.5; player.heading = -1.25;
+    playerMesh.group.position.set(player.x, 0.24, player.z);
+    playerMesh.group.rotation.y = player.heading;
     camYaw = -1.25; camPitch = 0.3;
-    hud.phone('LUPE', 'Marco? Lupe. There is a package waiting at the marina, south shore. Easy money.');
+    hud.phone('LUPE', 'Marco? Lupe. There is a package waiting at the marina, south shore. Easy money.', 120000);
+    hud.setMoney(player.money);
   } else if (shotName === 'drive') {
     const car = parked.find((c) => Math.abs(c.z - 3.2) < 30) || parked[0];
     car.mesh.position.set(-30, 0, 3.2);
@@ -515,7 +664,21 @@ function poseShot() {
     enterCar(car);
     car.speed = 11;
     police.clear();
+    // Dress the street: three traffic cars ahead and alongside, mid-flow.
+    const dress = [[-12, -3.2, Math.PI / 2], [4, 3.2, Math.PI / 2], [-46, -3.2, Math.PI / 2]];
+    traffic.slice(0, 3).forEach((t, i) => {
+      t.axis = 'x'; t.line = 0; t.dir = 1;
+      t.along = dress[i][0];
+      t.mesh.position.set(dress[i][0], 0, dress[i][1]);
+      t.heading = dress[i][2];
+      t.mesh.rotation.y = t.heading;
+      t.speed = 9;
+    });
+    hud.phone('LUPE', 'Wheels suit you, Marco. Keep them clean — the garage is watching.', 120000);
   } else if (shotName === 'chase') {
+    // Deterministic three-star chase, frozen: heat, stars and bust cannot
+    // drift while the pose holds. Two patrols tight behind, a roadblock
+    // of three cars and two officers across the road ahead.
     const car = parked[1];
     car.mesh.position.set(6, 0, -3.2);
     car.heading = -Math.PI / 2;
@@ -525,45 +688,43 @@ function poseShot() {
     car.speed = 13;
     police.setStars(3);
     police.update(0.016, { x: player.x, z: player.z, speed: 13, onFoot: false, heading: car.heading }, colliders);
-    // Pull the pursuit in tight behind the getaway car so the frame reads as a chase.
     police.cops.forEach((cop, i) => {
-      cop.mesh.position.set(player.x + 10 + i * 5, 0, player.z - 5 + i * 5);
+      const behind = [[20, -3.4], [27, 2.8], [38, -4.5]][i] || [24 + i * 6, -3];
+      cop.mesh.position.set(behind[0], 0, behind[1]);
       cop.heading = -Math.PI / 2;
       cop.mesh.rotation.y = cop.heading;
       cop.speed = 13;
     });
+    police.placeRoadblockAt(player.x - 42, 0, false);
+    police.setFrozen(true);
+    hud.phone('DEX', 'Three stars, Marco. Do NOT stop for the roadblock — thread it or go around!', 120000);
   } else if (shotName === 'mission') {
     player.x = LANDMARKS.marinaPickup.x + 6;
     player.z = LANDMARKS.marinaPickup.z + 6;
     player.heading = 2.6;
+    playerMesh.group.position.set(player.x, 0.24, player.z);
+    playerMesh.group.rotation.y = player.heading;
     camYaw = 2.6; camPitch = 0.3;
-    missions.startAt(0);
-    hud.phone('LUPE', 'Pick it up at the marina and bring it to the blue door on West 3rd. No questions.');
-    hud.banner('JOB 1 — FIRST ERRAND', 'Pick up the package at the marina');
+    hud.phone('LUPE', 'Pick it up at the marina and bring it to the blue door on West 3rd. No questions.', 120000);
+    hud.banner('JOB 1 — FIRST ERRAND', 'Pick up the package at the marina', 120000);
   }
 }
 
 // ---------------------------------------------------------------- the loop
-const clockEl = document.getElementById('clock');
-function districtName() {
-  if (player.z > 150) return 'The Marina';
-  if (player.x < -80 && player.z < -80) return 'Badge Hill';
-  if (player.x > 80 && player.z < -80) return 'Coral General District';
-  if (player.x > 60 && player.z > 60) return 'Garage Quarter';
-  return 'Downtown Coral City';
-}
-
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
-  let dt = Math.min(0.05, (now - last) / 1000);
+  // Clamped both ways: a first-frame timestamp behind `last` must never run
+  // the simulation backwards (negative decay once inflated heat and bust).
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
   last = now;
   if (mode === 'title') {
     // Slow orbital backdrop behind the start screen.
     const t = now / 1000;
+    city.update(t);
     camera.position.set(Math.sin(t * 0.05) * 120, 46, Math.cos(t * 0.05) * 120);
     camera.lookAt(0, 0, 20);
-    stepTraffic(traffic, dt, rng, [], null);
+    stepTraffic(traffic, dt, rng, [], null, time);
     stepPeds(peds, dt, rng, (x, z, r) => collideCircle(colliders, x, z, r));
     renderer.render(scene, camera);
     return;
@@ -573,11 +734,20 @@ function frame(now) {
     return;
   }
   time += dt;
+  stats.playSeconds += dt;
+  city.update(time);
+
+  // Music starts on the first genuine gesture if the run began from a pose.
+  if (input.gestured && !audio.musicStarted) audio.startMusic();
+  if (input.consume('KeyM')) hud.setMusic(audio.toggleMute());
 
   // --- simulate the world around the player
   const blockers = [{ x: player.x, z: player.z, r: player.onFoot ? 0.6 : 2 }];
   for (const cop of police.cops) blockers.push({ x: cop.x, z: cop.z, r: 2 });
-  stepTraffic(traffic, dt, rng, blockers, null);
+  stepTraffic(traffic, dt, rng, blockers, (car) => {
+    audio.horn(Math.hypot(car.x - player.x, car.z - player.z));
+  }, time);
+  if (rival) stepTraffic([rival], dt, rng, blockers, null, time);
   stepPeds(peds, dt, rng, (x, z, r) => collideCircle(colliders, x, z, r));
 
   if (player.onFoot) walkPlayer(dt);
@@ -610,6 +780,23 @@ function frame(now) {
     }
   }
 
+  // --- collectibles
+  for (const c of collectibles) {
+    if (c.found) continue;
+    c.mesh.rotation.y += dt * 2.2;
+    c.mesh.position.y = 0.9 + Math.sin(time * 2.4 + c.id) * 0.15;
+    if (Math.hypot(c.x - player.x, c.z - player.z) < (player.onFoot ? 1.6 : 2.8)) {
+      c.found = true;
+      c.mesh.visible = false;
+      player.money += 150;
+      hud.setMoney(player.money);
+      refreshCollectibleHud();
+      audio.pickup();
+      hud.banner('GOLDEN CASSETTE', `${collectibles.filter((k) => k.found).length} of 10 — +$150`);
+      saveGame();
+    }
+  }
+
   // --- police, bust and wasted
   const policeView = police.update(dt, {
     x: player.x, z: player.z, speed: player.speed, onFoot: player.onFoot, heading: player.heading,
@@ -619,7 +806,8 @@ function frame(now) {
 
   // --- missions and marker
   missions.update(dt, {
-    x: player.x, z: player.z, inCar: !player.onFoot, car: player.car, stars: police.wanted.stars,
+    x: player.x, z: player.z, inCar: !player.onFoot, car: player.car,
+    stars: police.wanted.stars, rivalBumps,
   });
   if (player.hasGun === false && missions.index >= 2) {
     player.hasGun = true;
@@ -662,22 +850,37 @@ function frame(now) {
   const obj = missions.objective();
   hud.setObjective(obj.title, obj.text);
   hud.setSpeed(player.onFoot ? 0 : player.speed * 3.6, !player.onFoot);
-  clockEl.textContent = districtName();
+  const district = districtAt(player.x, player.z);
+  hud.setDistrict(district);
   hud.drawMinimap({
     player: { x: player.x, z: player.z, heading: player.onFoot ? camYaw : player.heading },
     marker: mark,
     cops: police.cops,
+    officers: police.officers,
     roadblock: police.roadblock,
     traffic: traffic.filter((c) => !c.parked),
+    rival,
+    collectibles: collectibles.filter((c) => !c.found),
+    district,
   });
-  audio.update(dt, !player.onFoot, Math.abs(player.speed) / 26, policeView.nearestCop);
+  const heat = Math.max(
+    police.wanted.stars / 5,
+    policeView.nearestThreat !== null && policeView.nearestThreat < 22 ? 0.75 : 0,
+  );
+  audio.update(dt, !player.onFoot, Math.abs(player.speed) / 26, policeView.nearestCop, heat);
 
   renderer.render(scene, camera);
 
   if (shotName) {
-    // Hold the posed driving speed: with no keyboard, the arcade physics would
-    // coast to a stop before the shutter fires.
+    // Hold the posed driving speed: with no keyboard, the arcade physics
+    // would coast to a stop before the shutter fires.
     if ((shotName === 'drive' || shotName === 'chase') && player.car) player.car.speed = 12;
+    if (shotName === 'chase') {
+      // The freeze should make this a no-op; assert it anyway so the frame
+      // that gets captured can never show anything but exactly ★★★.
+      if (police.wanted.stars !== 3) police.setStars(3);
+      police.wanted.bust = 0;
+    }
     shotFrames += 1;
     if (shotFrames === 42 && shotName === 'mission') {
       hud.phone('LUPE', 'Pick it up at the marina and bring it to the blue door on West 3rd. No questions.', 120000);
@@ -686,7 +889,8 @@ function frame(now) {
     if (shotFrames === 42 && shotName === 'cover') {
       hud.phone('LUPE', 'Marco? Lupe. There is a package waiting at the marina, south shore. Easy money.', 120000);
     }
-    if (shotFrames > 50) window.__shotReady = true;
+    const missionSettled = shotName !== 'mission' || !!missions.marker();
+    if (shotFrames > 50 && missionSettled) window.__shotReady = true;
   }
 }
 

@@ -1,7 +1,9 @@
-// Coral City Heat — everything drawn over the 3D view: health, cash, stars, the
-// objective card, phone messages, banners, the bust meter, the speedometer and
-// the canvas minimap (roads, shore, the player's arrow, the mission marker and
-// every police and traffic blip worth knowing about).
+// Coral City Heat v2 — everything drawn over the 3D view: health, cash, stars,
+// the district name, the hidden-collectible counter, the objective card,
+// phone messages, banners, the bust meter, the speedometer, a music/mute
+// indicator and the canvas minimap (roads, shore, district tint, the
+// player's arrow, the mission marker, collectible glints and every police
+// and traffic blip worth knowing about).
 
 import { ROADS, ROAD_HALF, SHORE_Z } from './city.js';
 
@@ -10,6 +12,10 @@ export function createHud() {
   const hud = el('hud');
   const starsEl = el('stars');
   const moneyEl = el('money');
+  const clockEl = el('clock');
+  const districtEl = el('district');
+  const collectEl = el('collect-count');
+  const musicEl = el('music-state');
   const healthFill = el('healthbar').firstElementChild;
   const bustWrap = el('bustwrap');
   const bustFill = el('bustbar').firstElementChild;
@@ -83,11 +89,29 @@ export function createHud() {
       const [, ry] = toMap(0, r);
       g.beginPath(); g.moveTo(0, ry); g.lineTo(188, ry); g.stroke();
     }
+    // District label for wherever the player stands.
+    g.fillStyle = 'rgba(255,255,255,0.55)';
+    g.font = 'bold 8px sans-serif';
+    g.fillText((view.district || 'DOWNTOWN').toUpperCase(), 6, 12);
     // Traffic blips.
     g.fillStyle = '#aeb9c2';
     for (const c of view.traffic) {
       const [x, y] = toMap(c.x, c.z);
       g.fillRect(x - 1, y - 1, 2, 2);
+    }
+    // Unfound collectibles glint teal.
+    if (view.collectibles) {
+      g.fillStyle = '#2fe8c8';
+      for (const c of view.collectibles) {
+        const [x, y] = toMap(c.x, c.z);
+        g.fillRect(x - 1.5, y - 1.5, 3, 3);
+      }
+    }
+    // The rival courier, when a job has one loose in the city.
+    if (view.rival) {
+      const [x, y] = toMap(view.rival.x, view.rival.z);
+      g.fillStyle = '#c86bff';
+      g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
     }
     // Police blips flash blue/red.
     const flash = Math.floor(performance.now() / 350) % 2 === 0;
@@ -95,6 +119,13 @@ export function createHud() {
       const [x, y] = toMap(c.x, c.z);
       g.fillStyle = flash ? '#3d8bff' : '#ff5147';
       g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
+    }
+    if (view.officers) {
+      for (const c of view.officers) {
+        const [x, y] = toMap(c.x, c.z);
+        g.fillStyle = flash ? '#ff5147' : '#3d8bff';
+        g.fillRect(x - 1.5, y - 1.5, 3, 3);
+      }
     }
     if (view.roadblock) {
       for (const c of view.roadblock) {
@@ -136,12 +167,26 @@ export function createHud() {
     setMoney(n) { moneyEl.textContent = `$${n.toLocaleString()}`; },
     setHealth(ratio) { healthFill.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`; },
     setBust(ratio) {
-      bustWrap.classList.toggle('hidden', ratio <= 0.01);
-      bustFill.style.width = `${ratio * 100}%`;
+      const r = Math.max(0, Math.min(1, ratio));
+      bustWrap.classList.toggle('hidden', r <= 0.01);
+      bustFill.style.width = `${r * 100}%`;
+      // The bar turns arrest-red as it fills, so the danger reads at a glance.
+      bustFill.style.filter = r > 0.66 ? 'hue-rotate(-48deg) saturate(1.6)' : '';
     },
     setObjective(title, text) {
       if (objTitle.textContent !== title) objTitle.textContent = title;
       if (objText.textContent !== text) objText.textContent = text;
+    },
+    /** Clock line (legacy id) plus the named-district line under it. */
+    setDistrict(name) {
+      if (districtEl && districtEl.textContent !== name) districtEl.textContent = name;
+      if (clockEl && clockEl.textContent !== 'Coral City') clockEl.textContent = 'Coral City';
+    },
+    setCollectibles(found, total) {
+      if (collectEl) collectEl.textContent = `◆ ${found}/${total}`;
+    },
+    setMusic(muted) {
+      if (musicEl) musicEl.textContent = muted ? '♪ OFF (M)' : '♪ ON (M)';
     },
     setPrompt(html) {
       if (html) {

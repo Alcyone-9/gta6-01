@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Coral City Heat — an original open-world crime game for the desktop browser: eight jobs, a five-star wanted system with foot police and roadblocks, and a procedural funk soundtrack.">
+<link rel="icon" href="data:,">
 <title>Coral City Heat — an original open-world crime game</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1420; font-family: "Segoe UI", system-ui, sans-serif; }
@@ -16,8 +18,11 @@
   #stars { font-size: 30px; letter-spacing: 4px; color: #ffd23e; line-height: 1; min-height: 32px; }
   #stars .off { color: rgba(255,255,255,.28); }
   #money { font-size: 26px; font-weight: 700; color: #7dff8a; margin-top: 2px; }
-  #clock { font-size: 13px; color: #cfe6ff; opacity: .85; }
-  #healthwrap { position: absolute; right: 18px; top: 108px; width: 190px; }
+  #district { font-size: 15px; font-weight: 700; letter-spacing: 2px; color: #ffd9a0; margin-top: 2px; text-transform: uppercase; }
+  #clock { font-size: 12px; color: #cfe6ff; opacity: .85; }
+  #collect-count { font-size: 14px; font-weight: 700; color: #2fe8c8; margin-top: 2px; }
+  #music-state { font-size: 11px; color: #a9c6e2; opacity: .8; margin-top: 2px; }
+  #healthwrap { position: absolute; right: 18px; top: 148px; width: 190px; }
   .barlabel { font-size: 11px; letter-spacing: 2px; opacity: .9; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
   .bar { height: 12px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 3px; overflow: hidden; }
   .bar > div { height: 100%; width: 100%; transition: width .18s ease; }
@@ -57,15 +62,18 @@
     background: radial-gradient(ellipse at 50% 35%, rgba(255,145,60,.28), rgba(6,10,18,.92) 70%); color: #fff; text-align: center; z-index: 10; padding: 20px; }
   .screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd23e; text-shadow: 0 6px 24px rgba(0,0,0,.75); }
   .screen h1 span { color: #ff7a59; }
-  .screen .tag { font-size: 17px; color: #d9ecff; max-width: 620px; line-height: 1.5; margin: 14px 0 6px; }
+  .screen .tag { font-size: 17px; color: #d9ecff; max-width: 640px; line-height: 1.5; margin: 14px 0 6px; }
   .screen .controls { font-size: 14px; color: #a9c6e2; line-height: 1.7; margin: 12px 0 20px; }
   .screen .controls b { color: #fff; }
+  .screen .stats { font-size: 17px; color: #ffe9a8; line-height: 1.8; margin: 10px 0 18px; }
   .btn { pointer-events: auto; cursor: pointer; background: linear-gradient(180deg, #ffb03a, #ff7a59); color: #20130a; border: none;
     font-size: 20px; font-weight: 800; letter-spacing: 1px; padding: 13px 42px; border-radius: 30px; margin: 5px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
   .btn:hover { filter: brightness(1.1); }
   .btn.ghost { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.5); }
   #end-screen { background: rgba(10,4,4,.88); }
   #end-screen h1 { color: #ff5147; }
+  #clear-screen { background: radial-gradient(ellipse at 50% 35%, rgba(47,232,200,.22), rgba(6,14,12,.93) 70%); }
+  #clear-screen h1 { color: #2fe8c8; }
   #pause-screen { background: rgba(6,10,18,.78); }
   #pause-screen h1 { font-size: 40px; color: #fff; }
 </style>
@@ -78,7 +86,10 @@
   <div id="topbar">
     <div id="stars"></div>
     <div id="money">$0</div>
+    <div id="district">Downtown</div>
     <div id="clock">Coral City</div>
+    <div id="collect-count">◆ 0/10</div>
+    <div id="music-state">♪ ON (M)</div>
   </div>
   <div id="healthwrap">
     <div class="barlabel">HEALTH</div>
@@ -101,11 +112,14 @@
   <h1>CORAL CITY <span>HEAT</span></h1>
   <p class="tag">Marco Reyes just stepped off the bus with empty pockets and one phone number.
     Coral City — palms, marinas and money that moves after dark — rewards drivers who deliver
-    and punishes drivers who get caught. Five jobs stand between Marco and a reputation.</p>
+    and punishes drivers who get caught. Eight jobs stand between Marco and a reputation:
+    errands for Lupe, fares for Sable's cabs, a heat check for Dex, a rival courier to run
+    off the road — and one last harbour run with every cop in the city awake.</p>
   <p class="controls">
     <b>WASD</b> move / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> sprint<br>
     <b>E</b> enter / exit car &nbsp;·&nbsp; <b>Space</b> handbrake &nbsp;·&nbsp; <b>F</b> or <b>Click</b> punch / shoot<br>
-    <b>Esc</b> pause &nbsp;·&nbsp; Stars bring police — break their line of sight to cool down.
+    <b>M</b> music on/off &nbsp;·&nbsp; <b>Esc</b> pause &nbsp;·&nbsp; Stars bring police — on wheels and on foot. Break their line of sight to cool down.<br>
+    Ten golden cassettes are hidden around the city. Each one is cash in your pocket.
   </p>
   <div>
     <button class="btn" id="btn-start">START NEW GAME</button>
@@ -125,9 +139,21 @@
 <div id="end-screen" class="screen hidden">
   <h1 id="end-title">BUSTED</h1>
   <p class="tag" id="end-text"></p>
-  <button class="btn" id="btn-respawn">CONTINUE</button>
+  <button class="btn" id="btn-respawn">CONTINUE FROM CHECKPOINT</button>
 </div>
 
+<div id="clear-screen" class="screen hidden">
+  <h1>CITY CLEARED</h1>
+  <p class="tag">Every job done, every debt settled. Lupe raises a glass at the marina,
+    Sable puts your name on the dispatch wall, and Dex just nods. Coral City is yours.</p>
+  <p class="stats" id="clear-stats"></p>
+  <div>
+    <button class="btn" id="btn-freeroam">KEEP ROAMING</button>
+    <button class="btn ghost" id="btn-restart">RESTART STORY</button>
+  </div>
+</div>
+
+<noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#0d1420;font-family:sans-serif;padding:24px;text-align:center">Coral City Heat needs JavaScript — the whole city is generated in your browser.</div></noscript>
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.min.js" } }
 </script>

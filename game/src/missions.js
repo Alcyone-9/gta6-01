@@ -1,8 +1,12 @@
-// Coral City Heat — the five-job story. A small state machine walks Marco from
-// errand boy to the harbour run: each job is a short list of steps checked against
-// a per-frame snapshot of the world (where the player is, what they are driving,
-// how hot the police are). Jobs talk back through callbacks the main loop owns —
-// phone messages, banners, cash, the wanted level and one very special coupe.
+// Coral City Heat v2 — the eight-job story. A small state machine walks
+// Marco from errand boy to the harbour run: each job is a short list of steps
+// checked against a per-frame snapshot of the world (where the player is,
+// what they are driving, how hot the police are, whether the rival courier
+// has been bumped). Three voices carry the plot — LUPE, who runs the marina
+// end of town; DEX, who tests drivers; and SABLE, the cab dispatcher new in
+// v2, whose fares always pay well and never once go somewhere simple. Jobs
+// talk back through callbacks the main loop owns: phone messages, banners,
+// cash, the wanted level, one gold coupe, one roadster, one rival courier.
 
 import { LANDMARKS } from './city.js';
 
@@ -13,13 +17,22 @@ const CASE_SPOTS = [
 ];
 
 export function createMissions(api) {
-  let index = 0; // 0..4 while the story runs, 5 = story done, free roam
+  let index = 0; // 0..7 while the story runs, 8 = story done, free roam
   let step = 0;
   let gapTimer = 0;
   let caseTimer = 0;
   let casesLeft = [];
+  let checkTimer = 0;
+  let checksLeft = [];
+  let stepTimer = 0;
+  let rivalBumpsSeen = 0;
   let targetCar = null;
+  let rivalCar = null;
   let started = false;
+  // The "arrive hot" warning fires once per approach. It used to live on the
+  // shared step definition object (s.warned), so it leaked across restarts
+  // and even across jobs; it is run-local state and lives here now.
+  let heatWarned = false;
 
   const JOBS = [
     {
@@ -30,11 +43,11 @@ export function createMissions(api) {
         { text: 'Deliver the package to the blue door', at: LANDMARKS.dropOff },
       ],
       pay: 250,
-      done: ['LUPE', 'Clean work. The city pays people who deliver. More soon.'],
+      done: ['MARCO', 'Package delivered, hands clean. Coral City might suit me after all.'],
     },
     {
       title: 'Job 2 — Borrowed Wheels',
-      intro: ['LUPE', 'A gold Vireo Coupe is parked across town, and its owner owes us. Take it — quietly if you can — and bring it to the teal garage.'],
+      intro: ['LUPE', 'A gold Vireo Coupe is parked across town, and its owner owes us. Take it — quietly if you can — and bring it to the teal garage in the Garage Quarter.'],
       steps: [
         { text: 'Steal the marked gold coupe', car: true },
         { text: 'Deliver the coupe to the teal garage', at: LANDMARKS.garage, needCar: true },
@@ -43,8 +56,18 @@ export function createMissions(api) {
       done: ['LUPE', 'The garage boys left you a pistol in the glovebox of your life now. Check your hand — F or click to use it.'],
     },
     {
-      title: 'Job 3 — Heat Check',
-      intro: ['DEX', 'Dex here. Anyone can drive fast. I need to know you can drive HOT. The whole force knows your face in five minutes — reach the garage with at least two stars still burning.'],
+      title: 'Job 3 — Taxi Hustle',
+      intro: ['SABLE', 'Sable, Sable Cabs. One of my fares is stranded in Palm Heights and very, very late. Pick her up, get her to Portside, and the meter is the least of your worries — the clock is.'],
+      steps: [
+        { text: 'Pick up Sable\'s passenger in Palm Heights', at: LANDMARKS.taxiPickup },
+        { text: 'Drop the passenger in Portside — beat the clock!', at: LANDMARKS.taxiDrop, needCar: true, timer: 110 },
+      ],
+      pay: 500,
+      done: ['SABLE', 'On time, no dents, and she tipped in cash. You ever want honest work, wheelman, my dispatch is your dispatch.'],
+    },
+    {
+      title: 'Job 4 — Heat Check',
+      intro: ['DEX', 'Dex here. Anyone can drive fast. I need to know you can drive HOT. Reach the teal garage with at least two stars still burning and the real work is yours.'],
       steps: [
         { text: 'Reach the teal garage with at least ★★ wanted', at: LANDMARKS.garage, needStars: 2 },
       ],
@@ -52,13 +75,32 @@ export function createMissions(api) {
       done: ['DEX', 'Ha! Ice in the veins. You are hired for the real work.'],
     },
     {
-      title: 'Job 4 — Three Cases',
+      title: 'Job 5 — Three Cases',
       intro: ['LUPE', 'Three briefcases walked away from a card game last night. They are sitting all over the city and the owners want them back before anyone counts. Clock is running.'],
       steps: [
         { text: 'Collect the briefcases', cases: true },
       ],
       pay: 800,
-      done: ['LUPE', 'All three, and barely a scratch on them. One last run, Marco. The big one.'],
+      done: ['MARCO', 'Three cases, three corners of the city, one very tired driver. Lupe owes me a dinner.'],
+    },
+    {
+      title: 'Job 6 — Checkpoint Rush',
+      intro: ['SABLE', 'New game in town, Marco: three checkpoints, one clock, my whole fleet watching. Hit every gold ring in order and Sable Cabs puts your name on the wall.'],
+      steps: [
+        { text: 'Hit the checkpoints in order', checkpoints: true },
+      ],
+      pay: 900,
+      done: ['SABLE', 'Fastest name on my wall. The fleet is talking about you, wheelman.'],
+    },
+    {
+      title: 'Job 7 — Rival Package',
+      intro: ['DEX', 'A rival courier is running OUR package around the grid in a purple Suntail. Catch him, introduce his car to yours — twice — and he will drop it. Then bring the package to the teal garage.'],
+      steps: [
+        { text: 'Catch the rival courier and bump his car twice', rival: true },
+        { text: 'Bring the package to the teal garage', at: LANDMARKS.garage },
+      ],
+      pay: 1100,
+      done: ['LUPE', 'The rival boys just learned what this town already knew. One last run, Marco. The big one.'],
     },
     {
       title: 'Final Job — Harbour Run',
@@ -76,6 +118,12 @@ export function createMissions(api) {
     return index < JOBS.length ? JOBS[index] : null;
   }
 
+  function armStep() {
+    const s = currentJob()?.steps[step];
+    stepTimer = s && s.timer ? s.timer : 0;
+    heatWarned = false;
+  }
+
   function startJob() {
     const job = currentJob();
     if (!job) return;
@@ -83,19 +131,22 @@ export function createMissions(api) {
     started = true;
     api.phone(job.intro[0], job.intro[1]);
     api.sfx('phone');
-    if (index === 1) {
-      targetCar = api.markTargetCar();
-    }
-    if (index === 2) {
-      api.setStars(2);
-    }
-    if (index === 3) {
+    if (index === 1) targetCar = api.markTargetCar();
+    if (index === 3) api.setStars(2);
+    if (index === 4) {
       casesLeft = CASE_SPOTS.map((s) => ({ ...s }));
       caseTimer = 240;
     }
-    if (index === 4) {
-      targetCar = api.spawnFinalCar();
+    if (index === 5) {
+      checksLeft = LANDMARKS.raceChecks.map((s) => ({ ...s }));
+      checkTimer = 130;
     }
+    if (index === 6) {
+      rivalCar = api.spawnRivalCar();
+      rivalBumpsSeen = 0;
+    }
+    if (index === 7) targetCar = api.spawnFinalCar();
+    armStep();
   }
 
   function finishJob() {
@@ -104,15 +155,14 @@ export function createMissions(api) {
     api.banner('JOB COMPLETE', `${job.title} — $${job.pay.toLocaleString()}`);
     api.sfx('win');
     api.phone(job.done[0], job.done[1]);
+    api.onJobComplete(index);
     index += 1;
     step = 0;
     started = false;
     gapTimer = 5;
     targetCar = null;
-    if (index >= JOBS.length) {
-      api.banner('STORY COMPLETE', 'Coral City Heat — free roam unlocked');
-      api.onStoryComplete();
-    }
+    rivalCar = null;
+    if (index >= JOBS.length) api.onStoryComplete();
   }
 
   function failStep(message) {
@@ -127,6 +177,8 @@ export function createMissions(api) {
     const s = job.steps[step];
     if (!s) return null;
     if (s.cases) return casesLeft[0] || null;
+    if (s.checkpoints) return checksLeft[0] || null;
+    if (s.rival) return rivalCar ? { x: rivalCar.x, z: rivalCar.z } : null;
     if (s.car || s.finalCar) return targetCar ? { x: targetCar.x, z: targetCar.z } : null;
     return s.at || null;
   }
@@ -138,11 +190,14 @@ export function createMissions(api) {
     const s = job.steps[step];
     let text = s ? s.text : '';
     if (s && s.cases) text = `Collect the briefcases — ${casesLeft.length} left, ${Math.max(0, Math.ceil(caseTimer))}s`;
+    if (s && s.checkpoints) text = `Hit the checkpoints — ${checksLeft.length} left, ${Math.max(0, Math.ceil(checkTimer))}s`;
+    if (s && s.rival) text = `Catch the rival courier — bumps: ${rivalBumpsSeen}/2`;
+    if (s && s.timer) text += ` — ${Math.max(0, Math.ceil(stepTimer))}s`;
     if (s && s.needStars) text += ' (arrive with the heat on)';
     return { title: job.title, text };
   }
 
-  /** Advance the story. snap: {x, z, inCar, car, stars}. */
+  /** Advance the story. snap: {x, z, inCar, car, stars, rivalBumps}. */
   function update(dt, snap) {
     if (index >= JOBS.length) return;
     if (!started) {
@@ -153,6 +208,15 @@ export function createMissions(api) {
     const job = currentJob();
     const s = job.steps[step];
     if (!s) { finishJob(); return; }
+
+    // Generic per-step clock (the taxi drop).
+    if (s.timer) {
+      stepTimer -= dt;
+      if (stepTimer <= 0) {
+        stepTimer = s.timer;
+        failStep('Too slow — the fare walked and Sable is not pleased. The clock restarted; move.');
+      }
+    }
 
     if (s.cases) {
       caseTimer -= dt;
@@ -171,10 +235,39 @@ export function createMissions(api) {
       return;
     }
 
+    if (s.checkpoints) {
+      checkTimer -= dt;
+      if (checkTimer <= 0) {
+        checksLeft = LANDMARKS.raceChecks.map((c) => ({ ...c }));
+        checkTimer = 130;
+        failStep('Out of time — the checkpoints reset. Sable is timing you again from the top.');
+      }
+      const spot = checksLeft[0];
+      if (spot && Math.hypot(snap.x - spot.x, snap.z - spot.z) < 7) {
+        checksLeft.shift();
+        api.sfx('pickup');
+        api.phone('SABLE', checksLeft.length ? `Ring ${3 - checksLeft.length} of 3! Keep it pinned.` : 'That is the set!');
+        if (checksLeft.length === 0) finishJob();
+      }
+      return;
+    }
+
+    if (s.rival) {
+      rivalBumpsSeen = snap.rivalBumps || 0;
+      if (rivalBumpsSeen >= 2) {
+        step += 1;
+        armStep();
+        api.sfx('pickup');
+        api.phone('DEX', 'He dropped it! Package is yours — garage, now, before he grows a spine.');
+      }
+      return;
+    }
+
     if (s.car || s.finalCar) {
       if (snap.inCar && snap.car === targetCar) {
-        if (s.finalCar) api.setStars(3);
+        if (s.finalCar) api.setStars(4);
         step += 1;
+        armStep();
         api.sfx('pickup');
       }
       return;
@@ -183,22 +276,23 @@ export function createMissions(api) {
     if (s.at) {
       const d = Math.hypot(snap.x - s.at.x, snap.z - s.at.z);
       if (d < 5.5) {
-        if (s.needCar && !(snap.inCar && snap.car === targetCar)) {
-          // Standing at the drop without the car does nothing; the marker waits.
+        if (s.needCar && !(targetCar ? (snap.inCar && snap.car === targetCar) : snap.inCar)) {
+          // Standing at the drop without the right car does nothing; the marker waits.
           return;
         }
         if (s.needStars && snap.stars < s.needStars) {
-          if (!s.warned) {
-            s.warned = true;
+          if (!heatWarned) {
+            heatWarned = true;
             failStep('Too cold, Marco. The deal is OFF unless you arrive with at least two stars burning. Make some noise and come back.');
           }
           return;
         }
         step += 1;
+        armStep();
         api.sfx('pickup');
         if (step >= job.steps.length) finishJob();
       } else if (s.needStars) {
-        s.warned = false;
+        heatWarned = false;
       }
     }
   }
@@ -209,7 +303,9 @@ export function createMissions(api) {
     objective,
     startAt(i) { index = i; step = 0; started = false; gapTimer = i === 0 ? 1.2 : 2.5; },
     get index() { return index; },
+    get total() { return JOBS.length; },
     get done() { return index >= JOBS.length; },
     get targetCar() { return targetCar; },
+    get rivalCar() { return rivalCar; },
   };
 }
