@@ -1,205 +1,159 @@
-// Coral City Heat v2 — everything drawn over the 3D view: health, cash, stars,
-// the district name, the hidden-collectible counter, the objective card,
-// phone messages, banners, the bust meter, the speedometer, a music/mute
-// indicator and the canvas minimap (roads, shore, district tint, the
-// player's arrow, the mission marker, collectible glints and every police
-// and traffic blip worth knowing about).
+// hud.js — every piece of DOM and canvas HUD: cash, health, wanted stars,
+// the objective banner, dialog box, speedometer, BUSTED meter, contextual
+// hints, district name flashes and the 2D minimap.
 
-import { ROADS, ROAD_HALF, SHORE_Z } from './city.js';
+import { fmtCash } from './rng.js';
 
-export function createHud() {
-  const el = (id) => document.getElementById(id);
-  const hud = el('hud');
-  const starsEl = el('stars');
-  const moneyEl = el('money');
-  const clockEl = el('clock');
-  const districtEl = el('district');
-  const collectEl = el('collect-count');
-  const musicEl = el('music-state');
-  const healthFill = el('healthbar').firstElementChild;
-  const bustWrap = el('bustwrap');
-  const bustFill = el('bustbar').firstElementChild;
-  const objTitle = el('obj-title');
-  const objText = el('obj-text');
-  const phoneEl = el('phone');
-  const phoneFrom = el('phone-from');
-  const phoneMsg = el('phone-msg');
-  const bannerEl = el('banner');
-  const bannerBig = el('banner-big');
-  const bannerSub = el('banner-sub');
-  const promptEl = el('prompt');
-  const speedoEl = el('speedo');
-  const speedNum = el('speed-num');
-  const hitEl = el('hitmarker');
-  const mapCtx = el('minimap').getContext('2d');
-  let phoneTimer = null;
-  let bannerTimer = null;
-  let lastStars = -1;
-
-  function phone(from, msg, holdMs = 6500) {
-    phoneFrom.textContent = `✆ ${from}`;
-    phoneMsg.textContent = msg;
-    phoneEl.classList.add('show');
-    if (phoneTimer) clearTimeout(phoneTimer);
-    phoneTimer = setTimeout(() => phoneEl.classList.remove('show'), holdMs);
+export class Hud {
+  constructor() {
+    this.el = {};
+    const ids = [
+      'hud', 'cashLabel', 'cassetteLabel', 'hpFill', 'starsLabel', 'districtLabel',
+      'objectiveLabel', 'dialogBox', 'dialogName', 'dialogText', 'speedo',
+      'bustedWrap', 'bustedFill', 'hintLabel', 'toastLabel', 'minimap', 'phoneLabel',
+    ];
+    for (const id of ids) this.el[id] = document.getElementById(id);
+    this.mapCtx = this.el.minimap ? this.el.minimap.getContext('2d') : null;
+    this.toastTime = 0;
+    this.lastDistrict = '';
+    this.districtTime = 0;
   }
 
-  function banner(big, sub, holdMs = 3400) {
-    bannerBig.textContent = big;
-    bannerSub.textContent = sub || '';
-    bannerEl.classList.add('show');
-    if (bannerTimer) clearTimeout(bannerTimer);
-    bannerTimer = setTimeout(() => bannerEl.classList.remove('show'), holdMs);
+  show() {
+    if (this.el.hud) this.el.hud.style.display = 'block';
+  }
+  hide() {
+    if (this.el.hud) this.el.hud.style.display = 'none';
   }
 
-  function hitmark() {
-    hitEl.style.opacity = '1';
-    setTimeout(() => { hitEl.style.opacity = '0'; }, 90);
+  toast(text, seconds) {
+    if (!this.el.toastLabel) return;
+    this.el.toastLabel.textContent = text;
+    this.el.toastLabel.style.opacity = '1';
+    this.toastTime = seconds || 3;
   }
 
-  function setStars(n) {
-    if (n === lastStars) return;
-    lastStars = n;
-    let html = '';
-    for (let i = 0; i < 5; i++) html += i < n ? '★' : '<span class="off">★</span>';
-    starsEl.innerHTML = html;
-  }
-
-  const WORLD = 235; // half-extent mapped onto the minimap
-  function toMap(x, z) {
-    return [((x + WORLD) / (WORLD * 2)) * 188, ((z + WORLD) / (WORLD * 2)) * 188];
-  }
-
-  function drawMinimap(view) {
-    const g = mapCtx;
-    g.fillStyle = '#22384a';
-    g.fillRect(0, 0, 188, 188);
-    // Water south of the shore line.
-    const [, shoreY] = toMap(0, SHORE_Z);
-    g.fillStyle = '#1f6f96';
-    g.fillRect(0, shoreY, 188, 188 - shoreY);
-    g.fillStyle = '#e3cf9e';
-    g.fillRect(0, shoreY - 2, 188, 3);
-    // Roads.
-    g.strokeStyle = '#4a5a68';
-    g.lineWidth = Math.max(2, (ROAD_HALF * 2 / (WORLD * 2)) * 188);
-    for (const r of ROADS) {
-      const [rx] = toMap(r, 0);
-      g.beginPath(); g.moveTo(rx, 0); g.lineTo(rx, shoreY); g.stroke();
-      const [, ry] = toMap(0, r);
-      g.beginPath(); g.moveTo(0, ry); g.lineTo(188, ry); g.stroke();
+  update(dt, s) {
+    if (this.toastTime > 0) {
+      this.toastTime -= dt;
+      if (this.toastTime <= 0 && this.el.toastLabel) this.el.toastLabel.style.opacity = '0';
     }
-    // District label for wherever the player stands.
-    g.fillStyle = 'rgba(255,255,255,0.55)';
-    g.font = 'bold 8px sans-serif';
-    g.fillText((view.district || 'DOWNTOWN').toUpperCase(), 6, 12);
-    // Traffic blips.
-    g.fillStyle = '#aeb9c2';
-    for (const c of view.traffic) {
-      const [x, y] = toMap(c.x, c.z);
-      g.fillRect(x - 1, y - 1, 2, 2);
+    if (this.el.cashLabel) this.el.cashLabel.textContent = fmtCash(s.cash);
+    if (this.el.cassetteLabel) this.el.cassetteLabel.textContent = '📼 ' + s.cassettes + ' / 10';
+    if (this.el.hpFill) {
+      this.el.hpFill.style.width = Math.max(0, s.hp) + '%';
+      this.el.hpFill.style.background = s.hp > 30 ? '#59d867' : '#e8433c';
     }
-    // Unfound collectibles glint teal.
-    if (view.collectibles) {
-      g.fillStyle = '#2fe8c8';
-      for (const c of view.collectibles) {
-        const [x, y] = toMap(c.x, c.z);
-        g.fillRect(x - 1.5, y - 1.5, 3, 3);
+    if (this.el.starsLabel) {
+      const stars = '★'.repeat(s.wanted) + '☆'.repeat(5 - s.wanted);
+      this.el.starsLabel.textContent = stars;
+      this.el.starsLabel.style.color = s.wanted > 0 ? '#ffd23e' : 'rgba(255,255,255,0.35)';
+    }
+    if (this.el.objectiveLabel) this.el.objectiveLabel.textContent = s.objective || '';
+    if (this.el.phoneLabel) {
+      this.el.phoneLabel.textContent = s.phoneText || '';
+      this.el.phoneLabel.style.display = s.phoneText ? 'block' : 'none';
+    }
+    if (s.district && s.district !== this.lastDistrict) {
+      this.lastDistrict = s.district;
+      this.districtTime = 2.6;
+      if (this.el.districtLabel) {
+        this.el.districtLabel.textContent = s.district;
+        this.el.districtLabel.style.opacity = '1';
       }
     }
-    // The rival courier, when a job has one loose in the city.
-    if (view.rival) {
-      const [x, y] = toMap(view.rival.x, view.rival.z);
-      g.fillStyle = '#c86bff';
-      g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
+    if (this.districtTime > 0) {
+      this.districtTime -= dt;
+      if (this.districtTime <= 0 && this.el.districtLabel) this.el.districtLabel.style.opacity = '0';
     }
-    // Police blips flash blue/red.
-    const flash = Math.floor(performance.now() / 350) % 2 === 0;
-    for (const c of view.cops) {
-      const [x, y] = toMap(c.x, c.z);
-      g.fillStyle = flash ? '#3d8bff' : '#ff5147';
-      g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
-    }
-    if (view.officers) {
-      for (const c of view.officers) {
-        const [x, y] = toMap(c.x, c.z);
-        g.fillStyle = flash ? '#ff5147' : '#3d8bff';
-        g.fillRect(x - 1.5, y - 1.5, 3, 3);
+    if (this.el.speedo) {
+      if (s.driving) {
+        this.el.speedo.style.display = 'block';
+        this.el.speedo.textContent = Math.round(Math.abs(s.speed) * 3.6) + ' km/h';
+      } else {
+        this.el.speedo.style.display = 'none';
       }
     }
-    if (view.roadblock) {
-      for (const c of view.roadblock) {
-        const [x, y] = toMap(c.x, c.z);
-        g.fillStyle = '#ff5147';
-        g.fillRect(x - 2, y - 2, 4, 4);
+    if (this.el.bustedWrap) {
+      if (s.busted > 0.02) {
+        this.el.bustedWrap.style.display = 'block';
+        this.el.bustedFill.style.width = Math.round(s.busted * 100) + '%';
+      } else {
+        this.el.bustedWrap.style.display = 'none';
       }
     }
-    // Mission marker: a gold diamond that breathes.
-    if (view.marker) {
-      const [x, y] = toMap(view.marker.x, view.marker.z);
-      const s = 5 + Math.sin(performance.now() / 280) * 1.4;
-      g.fillStyle = '#ffd23e';
+    if (this.el.hintLabel) this.el.hintLabel.textContent = s.hint || '';
+    this.drawMinimap(s);
+  }
+
+  showDialog(speaker, line) {
+    if (!this.el.dialogBox) return;
+    this.el.dialogBox.style.display = 'block';
+    this.el.dialogName.textContent = speaker;
+    this.el.dialogText.textContent = line;
+  }
+  hideDialog() {
+    if (this.el.dialogBox) this.el.dialogBox.style.display = 'none';
+  }
+
+  drawMinimap(s) {
+    const g = this.mapCtx;
+    if (!g) return;
+    const W = 176;
+    const H = 176;
+    const scale = W / 320;
+    const toMap = (x, z) => [W / 2 + x * scale, H / 2 + z * scale];
+    g.fillStyle = '#274b63';
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = '#3f7a4d';
+    g.fillRect(0, 0, W, H);
+    // sea on the east
+    const [seaX] = toMap(140, 0);
+    g.fillStyle = '#2e86ab';
+    g.fillRect(seaX, 0, W - seaX, H);
+    g.fillStyle = '#eed9a0';
+    const [sandX] = toMap(138, 0);
+    g.fillRect(sandX, 0, Math.max(2, seaX - sandX + 6), H);
+    // roads
+    g.strokeStyle = '#22262b';
+    g.lineWidth = 5;
+    for (const c of [-112, -56, 0, 56, 112]) {
+      const [rx] = toMap(c, 0);
       g.beginPath();
-      g.moveTo(x, y - s); g.lineTo(x + s, y); g.lineTo(x, y + s); g.lineTo(x - s, y);
-      g.closePath(); g.fill();
-      g.strokeStyle = 'rgba(0,0,0,.5)';
-      g.lineWidth = 1;
+      g.moveTo(rx, 0);
+      g.lineTo(rx, H);
+      g.stroke();
+      const [, rz] = toMap(0, c);
+      g.beginPath();
+      g.moveTo(0, rz);
+      g.lineTo(W, rz);
       g.stroke();
     }
-    // Player arrow.
-    const [px, py] = toMap(view.player.x, view.player.z);
+    const dot = (x, z, color, r) => {
+      const [mx, my] = toMap(x, z);
+      g.fillStyle = color;
+      g.beginPath();
+      g.arc(mx, my, r, 0, Math.PI * 2);
+      g.fill();
+    };
+    if (s.cassettePts) for (const c of s.cassettePts) dot(c.x, c.z, '#ffe14d', 2);
+    if (s.cops) for (const c of s.cops) dot(c.x, c.z, '#ff4444', 3);
+    if (s.marker) dot(s.marker.x, s.marker.z, '#ffd23e', 4.5);
+    // player arrow
+    const [px, py] = toMap(s.playerX, s.playerZ);
     g.save();
     g.translate(px, py);
-    g.rotate(Math.PI - view.player.heading);
+    g.rotate(Math.PI - (s.playerAngle || 0));
     g.fillStyle = '#ffffff';
     g.beginPath();
-    g.moveTo(0, -6); g.lineTo(4.4, 5); g.lineTo(0, 2.4); g.lineTo(-4.4, 5);
-    g.closePath(); g.fill();
+    g.moveTo(0, -6);
+    g.lineTo(4, 5);
+    g.lineTo(-4, 5);
+    g.closePath();
+    g.fill();
     g.restore();
+    g.strokeStyle = 'rgba(255,255,255,0.5)';
+    g.lineWidth = 2;
+    g.strokeRect(1, 1, W - 2, H - 2);
   }
-
-  return {
-    show() { hud.classList.remove('hidden'); },
-    phone,
-    banner,
-    hitmark,
-    setStars,
-    setMoney(n) { moneyEl.textContent = `$${n.toLocaleString()}`; },
-    setHealth(ratio) { healthFill.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`; },
-    setBust(ratio) {
-      const r = Math.max(0, Math.min(1, ratio));
-      bustWrap.classList.toggle('hidden', r <= 0.01);
-      bustFill.style.width = `${r * 100}%`;
-      // The bar turns arrest-red as it fills, so the danger reads at a glance.
-      bustFill.style.filter = r > 0.66 ? 'hue-rotate(-48deg) saturate(1.6)' : '';
-    },
-    setObjective(title, text) {
-      if (objTitle.textContent !== title) objTitle.textContent = title;
-      if (objText.textContent !== text) objText.textContent = text;
-    },
-    /** Clock line (legacy id) plus the named-district line under it. */
-    setDistrict(name) {
-      if (districtEl && districtEl.textContent !== name) districtEl.textContent = name;
-      if (clockEl && clockEl.textContent !== 'Coral City') clockEl.textContent = 'Coral City';
-    },
-    setCollectibles(found, total) {
-      if (collectEl) collectEl.textContent = `◆ ${found}/${total}`;
-    },
-    setMusic(muted) {
-      if (musicEl) musicEl.textContent = muted ? '♪ OFF (M)' : '♪ ON (M)';
-    },
-    setPrompt(html) {
-      if (html) {
-        promptEl.innerHTML = html;
-        promptEl.classList.remove('hidden');
-      } else {
-        promptEl.classList.add('hidden');
-      }
-    },
-    setSpeed(kmh, driving) {
-      speedoEl.classList.toggle('hidden', !driving);
-      if (driving) speedNum.textContent = String(Math.round(Math.abs(kmh)));
-    },
-    drawMinimap,
-  };
 }

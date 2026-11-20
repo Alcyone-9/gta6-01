@@ -1,14 +1,11 @@
-// Coral City Heat v2 — deterministic randomness and small math helpers.
-// The whole city is seeded, so a given ?seed= always builds the same streets:
-// that is what makes the screenshot poses reproducible frame after frame.
-// v2.1: pick() now refuses an empty list loudly instead of returning a
-// silent undefined that surfaces three modules away as a NaN position, and
-// chance() gives call sites a named coin flip instead of rng() < p noise.
+// rng.js — deterministic seeded randomness for Coral City Heat.
+// Everything random in the game flows through one of these generators so a
+// given ?seed= always builds the same city and the screenshot poses match.
 
-/** mulberry32: a tiny, fast, seedable PRNG. Returns a function giving [0, 1). */
-export function mulberry32(initial) {
-  let a = initial | 0;
-  return function random() {
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
@@ -16,64 +13,58 @@ export function mulberry32(initial) {
   };
 }
 
-/** Random float in [min, max). */
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
+export class Rng {
+  constructor(seed = 1) {
+    this.next = mulberry32(seed);
+  }
+  float() {
+    return this.next();
+  }
+  range(lo, hi) {
+    return lo + (hi - lo) * this.next();
+  }
+  int(lo, hi) {
+    return Math.floor(this.range(lo, hi + 1));
+  }
+  pick(list) {
+    return list[Math.floor(this.next() * list.length) % list.length];
+  }
+  chance(p) {
+    return this.next() < p;
+  }
+  sign() {
+    return this.next() < 0.5 ? -1 : 1;
+  }
 }
 
-/** Random integer in [min, max] inclusive. */
-export function intRange(rng, min, max) {
-  return Math.floor(range(rng, min, max + 1));
-}
-
-/** Pick one element of a non-empty array. */
-export function pick(rng, list) {
-  if (!list || list.length === 0) throw new Error('pick() called with an empty list');
-  return list[Math.floor(rng() * list.length)];
-}
-
-/** True with probability p (0..1) on the given stream. */
-export function chance(rng, p) {
-  return rng() < p;
-}
-
-export function clamp(value, min, max) {
-  return value < min ? min : value > max ? max : value;
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
 }
 
 export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-/** Smooth 0..1 easing used by camera and water animation. */
-export function smooth(t) {
-  const x = clamp(t, 0, 1);
-  return x * x * (3 - 2 * x);
+export function dist2d(ax, az, bx, bz) {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return Math.sqrt(dx * dx + dz * dz);
 }
 
-/** Shortest signed angular difference from `from` to `to`, in radians. */
-export function angleDelta(from, to) {
-  let d = (to - from) % (Math.PI * 2);
+export function angleLerp(a, b, t) {
+  let d = (b - a) % (Math.PI * 2);
   if (d > Math.PI) d -= Math.PI * 2;
   if (d < -Math.PI) d += Math.PI * 2;
-  return d;
+  return a + d * t;
 }
 
-/** Turn `current` toward `target` by at most `maxStep` radians. */
-export function turnToward(current, target, maxStep) {
-  const d = angleDelta(current, target);
-  if (Math.abs(d) <= maxStep) return target;
-  return current + Math.sign(d) * maxStep;
+export function fmtCash(n) {
+  return '$' + Math.floor(n).toLocaleString('en-US');
 }
 
-/** Squared distance between two {x, z} points on the ground plane. */
-export function distSq2D(a, b) {
-  const dx = a.x - b.x;
-  const dz = a.z - b.z;
-  return dx * dx + dz * dz;
-}
-
-/** Ground-plane distance between two {x, z} points. */
-export function dist2D(a, b) {
-  return Math.hypot(a.x - b.x, a.z - b.z);
+export function fmtTime(sec) {
+  const s = Math.max(0, Math.ceil(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ':' + String(r).padStart(2, '0');
 }

@@ -1,162 +1,131 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Coral City Heat — an original open-world crime game for the desktop browser: eight jobs, a five-star wanted system with foot police and roadblocks, and a procedural funk soundtrack.">
+<title>Coral City Heat</title>
 <link rel="icon" href="data:,">
-<title>Coral City Heat — an original open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1420; font-family: "Segoe UI", system-ui, sans-serif; }
-  #game { position: fixed; inset: 0; }
-  #game canvas { display: block; }
-  .hidden { display: none !important; }
-
-  /* ---------- HUD ---------- */
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; }
-  #topbar { position: absolute; top: 14px; right: 18px; text-align: right; text-shadow: 0 2px 6px rgba(0,0,0,.65); }
-  #stars { font-size: 30px; letter-spacing: 4px; color: #ffd23e; line-height: 1; min-height: 32px; }
-  #stars .off { color: rgba(255,255,255,.28); }
-  #money { font-size: 26px; font-weight: 700; color: #7dff8a; margin-top: 2px; }
-  #district { font-size: 15px; font-weight: 700; letter-spacing: 2px; color: #ffd9a0; margin-top: 2px; text-transform: uppercase; }
-  #clock { font-size: 12px; color: #cfe6ff; opacity: .85; }
-  #collect-count { font-size: 14px; font-weight: 700; color: #2fe8c8; margin-top: 2px; }
-  #music-state { font-size: 11px; color: #a9c6e2; opacity: .8; margin-top: 2px; }
-  #healthwrap { position: absolute; right: 18px; top: 148px; width: 190px; }
-  .barlabel { font-size: 11px; letter-spacing: 2px; opacity: .9; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
-  .bar { height: 12px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 3px; overflow: hidden; }
-  .bar > div { height: 100%; width: 100%; transition: width .18s ease; }
-  #healthbar > div { background: linear-gradient(90deg, #ff5f4d, #ffb03a); }
-  #bustwrap { margin-top: 8px; }
-  #bustbar > div { background: linear-gradient(90deg, #4da3ff, #d6ecff); width: 0%; }
-
-  #objective { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); max-width: 560px; text-align: center;
-    background: rgba(8,14,24,.62); border: 1px solid rgba(255,210,62,.55); border-radius: 8px; padding: 9px 18px; }
-  #objective .obj-title { color: #ffd23e; font-weight: 700; letter-spacing: 1px; font-size: 14px; text-transform: uppercase; }
-  #objective .obj-text { font-size: 15px; margin-top: 2px; }
-
-  #phone { position: absolute; right: 18px; bottom: 210px; width: 250px; background: rgba(10,16,26,.82);
-    border: 1px solid rgba(140,200,255,.4); border-radius: 12px; padding: 10px 12px; opacity: 0; transition: opacity .3s; }
-  #phone.show { opacity: 1; }
-  #phone .from { color: #8cc8ff; font-size: 12px; font-weight: 700; letter-spacing: 1px; }
-  #phone .msg { font-size: 14px; margin-top: 3px; line-height: 1.35; }
-
-  #banner { position: absolute; top: 34%; left: 50%; transform: translate(-50%,-50%); text-align: center; opacity: 0; transition: opacity .35s; }
-  #banner.show { opacity: 1; }
-  #banner .big { font-size: 52px; font-weight: 800; letter-spacing: 3px; color: #ffd23e; text-shadow: 0 4px 18px rgba(0,0,0,.8); }
-  #banner .sub { font-size: 20px; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
-
-  #minimap-wrap { position: absolute; left: 18px; bottom: 18px; width: 188px; }
-  #minimap { width: 188px; height: 188px; border-radius: 10px; border: 2px solid rgba(255,255,255,.55); background: #12202f; display: block; }
-  #speedo { position: absolute; right: 22px; bottom: 22px; text-align: right; text-shadow: 0 2px 6px rgba(0,0,0,.7); }
-  #speedo .num { font-size: 44px; font-weight: 800; }
-  #speedo .unit { font-size: 14px; letter-spacing: 2px; opacity: .85; }
-  #prompt { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); background: rgba(8,14,24,.75);
-    border: 1px solid rgba(255,255,255,.45); padding: 8px 16px; border-radius: 20px; font-size: 16px; }
-  #prompt b { color: #ffd23e; }
-  #hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 26px; color: #ffdf6b; opacity: 0; }
-  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 18px; color: rgba(255,255,255,.85); text-shadow: 0 1px 3px #000; }
-
-  /* ---------- overlays ---------- */
-  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
-    background: radial-gradient(ellipse at 50% 35%, rgba(255,145,60,.28), rgba(6,10,18,.92) 70%); color: #fff; text-align: center; z-index: 10; padding: 20px; }
-  .screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd23e; text-shadow: 0 6px 24px rgba(0,0,0,.75); }
-  .screen h1 span { color: #ff7a59; }
-  .screen .tag { font-size: 17px; color: #d9ecff; max-width: 640px; line-height: 1.5; margin: 14px 0 6px; }
-  .screen .controls { font-size: 14px; color: #a9c6e2; line-height: 1.7; margin: 12px 0 20px; }
-  .screen .controls b { color: #fff; }
-  .screen .stats { font-size: 17px; color: #ffe9a8; line-height: 1.8; margin: 10px 0 18px; }
-  .btn { pointer-events: auto; cursor: pointer; background: linear-gradient(180deg, #ffb03a, #ff7a59); color: #20130a; border: none;
-    font-size: 20px; font-weight: 800; letter-spacing: 1px; padding: 13px 42px; border-radius: 30px; margin: 5px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; font-family: 'Segoe UI', Arial, sans-serif; }
+  #gameCanvas { display: block; width: 100%; height: 100%; }
+  #hud { display: none; position: fixed; inset: 0; pointer-events: none; color: #fff; }
+  .panel { background: rgba(12,16,22,0.62); border: 1px solid rgba(255,255,255,0.22); border-radius: 8px; }
+  #topLeft { position: absolute; top: 14px; left: 14px; padding: 10px 14px; min-width: 210px; }
+  #cashLabel { font-size: 26px; font-weight: 800; color: #7dd87d; text-shadow: 0 2px 4px #000; }
+  #cassetteLabel { font-size: 14px; color: #ffe14d; margin-top: 2px; }
+  #hpWrap { margin-top: 7px; width: 190px; height: 13px; background: rgba(0,0,0,0.55); border-radius: 6px; overflow: hidden; }
+  #hpFill { height: 100%; width: 100%; background: #59d867; transition: width 0.15s; }
+  #starsLabel { position: absolute; top: 14px; right: 16px; font-size: 30px; letter-spacing: 3px; text-shadow: 0 2px 5px #000; }
+  #districtLabel { position: absolute; top: 64px; right: 18px; font-size: 21px; font-weight: 700; color: #ffd9a0; text-shadow: 0 2px 5px #000; opacity: 0; transition: opacity 0.5s; }
+  #objectiveLabel { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); max-width: 560px; text-align: center; padding: 8px 18px; font-size: 16px; font-weight: 600; }
+  #phoneLabel { position: absolute; bottom: 196px; right: 16px; padding: 7px 12px; font-size: 14px; color: #ffe14d; display: none; }
+  #minimap { position: absolute; bottom: 14px; left: 14px; border-radius: 8px; }
+  #dialogBox { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 620px; max-width: 92vw; padding: 14px 18px; display: none; }
+  #dialogName { color: #ffd23e; font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 1px; }
+  #dialogText { font-size: 17px; line-height: 1.4; margin-top: 3px; }
+  #speedo { position: absolute; bottom: 24px; right: 20px; font-size: 30px; font-weight: 800; text-shadow: 0 2px 5px #000; display: none; }
+  #bustedWrap { position: absolute; top: 110px; left: 50%; transform: translateX(-50%); width: 300px; display: none; text-align: center; }
+  #bustedWrap .lbl { color: #ff6b5e; font-weight: 800; letter-spacing: 3px; font-size: 18px; text-shadow: 0 2px 4px #000; }
+  #bustedBar { height: 12px; background: rgba(0,0,0,0.6); border-radius: 6px; overflow: hidden; margin-top: 4px; }
+  #bustedFill { height: 100%; width: 0%; background: #e8433c; }
+  #hintLabel { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); font-size: 13px; color: rgba(255,255,255,0.85); text-shadow: 0 1px 3px #000; }
+  #toastLabel { position: absolute; top: 120px; left: 50%; transform: translateX(-50%); font-size: 21px; font-weight: 700; color: #ffe14d; text-shadow: 0 2px 5px #000; opacity: 0; transition: opacity 0.3s; }
+  .screen { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; text-align: center; color: #fff; background: radial-gradient(ellipse at 50% 65%, rgba(232,144,90,0.35), rgba(10,8,14,0.88) 70%); z-index: 10; padding: 20px; }
+  .screen h1 { font-size: 64px; letter-spacing: 2px; color: #ffd23e; text-shadow: 0 4px 0 #b3541e, 0 8px 22px #000; font-style: italic; }
+  .screen h2 { font-size: 44px; letter-spacing: 4px; text-shadow: 0 4px 14px #000; }
+  .screen p { max-width: 640px; font-size: 17px; line-height: 1.5; margin-top: 12px; color: #f5e9d6; }
+  .screen .controls { margin-top: 14px; font-size: 14px; color: #cfd8de; line-height: 1.7; }
+  .btn { pointer-events: auto; margin-top: 22px; padding: 13px 38px; font-size: 19px; font-weight: 800; letter-spacing: 1px; color: #231303; background: linear-gradient(#ffd23e, #f59e2c); border: none; border-radius: 9px; cursor: pointer; box-shadow: 0 5px 16px rgba(0,0,0,0.5); }
   .btn:hover { filter: brightness(1.1); }
-  .btn.ghost { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.5); }
-  #end-screen { background: rgba(10,4,4,.88); }
-  #end-screen h1 { color: #ff5147; }
-  #clear-screen { background: radial-gradient(ellipse at 50% 35%, rgba(47,232,200,.22), rgba(6,14,12,.93) 70%); }
-  #clear-screen h1 { color: #2fe8c8; }
-  #pause-screen { background: rgba(6,10,18,.78); }
-  #pause-screen h1 { font-size: 40px; color: #fff; }
+  .btn.secondary { background: linear-gradient(#e8e3d9, #b9b3a4); margin-left: 10px; }
+  #bustedScreen h2 { color: #5ea8ff; }
+  #wastedScreen h2 { color: #e8433c; }
+  #clearedScreen h2 { color: #7dd87d; }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
 </head>
 <body>
-<div id="game"></div>
+<canvas id="gameCanvas"></canvas>
 
-<div id="hud" class="hidden">
-  <div id="objective"><div class="obj-title" id="obj-title">Free roam</div><div class="obj-text" id="obj-text">Explore Coral City.</div></div>
-  <div id="topbar">
-    <div id="stars"></div>
-    <div id="money">$0</div>
-    <div id="district">Downtown</div>
-    <div id="clock">Coral City</div>
-    <div id="collect-count">◆ 0/10</div>
-    <div id="music-state">♪ ON (M)</div>
+<div id="hud">
+  <div id="topLeft" class="panel">
+    <div id="cashLabel">$120</div>
+    <div id="cassetteLabel">📼 0 / 10</div>
+    <div id="hpWrap"><div id="hpFill"></div></div>
   </div>
-  <div id="healthwrap">
-    <div class="barlabel">HEALTH</div>
-    <div class="bar" id="healthbar"><div></div></div>
-    <div id="bustwrap" class="hidden">
-      <div class="barlabel">BUSTED</div>
-      <div class="bar" id="bustbar"><div></div></div>
-    </div>
+  <div id="starsLabel">☆☆☆☆☆</div>
+  <div id="districtLabel">Downtown</div>
+  <div id="objectiveLabel" class="panel"></div>
+  <div id="phoneLabel" class="panel"></div>
+  <canvas id="minimap" width="176" height="176"></canvas>
+  <div id="dialogBox" class="panel">
+    <div id="dialogName">Lupe</div>
+    <div id="dialogText"></div>
   </div>
-  <div id="phone"><div class="from" id="phone-from">UNKNOWN</div><div class="msg" id="phone-msg"></div></div>
-  <div id="banner"><div class="big" id="banner-big"></div><div class="sub" id="banner-sub"></div></div>
-  <div id="minimap-wrap"><canvas id="minimap" width="188" height="188"></canvas></div>
-  <div id="speedo" class="hidden"><span class="num" id="speed-num">0</span> <span class="unit">KM/H</span></div>
-  <div id="prompt" class="hidden"></div>
-  <div id="crosshair">+</div>
-  <div id="hitmarker">✕</div>
+  <div id="speedo">0 km/h</div>
+  <div id="bustedWrap">
+    <div class="lbl">BUSTED</div>
+    <div id="bustedBar"><div id="bustedFill"></div></div>
+  </div>
+  <div id="toastLabel"></div>
+  <div id="hintLabel"></div>
 </div>
 
-<div id="start-screen" class="screen">
-  <h1>CORAL CITY <span>HEAT</span></h1>
-  <p class="tag">Marco Reyes just stepped off the bus with empty pockets and one phone number.
-    Coral City — palms, marinas and money that moves after dark — rewards drivers who deliver
-    and punishes drivers who get caught. Eight jobs stand between Marco and a reputation:
-    errands for Lupe, fares for Sable's cabs, a heat check for Dex, a rival courier to run
-    off the road — and one last harbour run with every cop in the city awake.</p>
-  <p class="controls">
-    <b>WASD</b> move / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> sprint<br>
-    <b>E</b> enter / exit car &nbsp;·&nbsp; <b>Space</b> handbrake &nbsp;·&nbsp; <b>F</b> or <b>Click</b> punch / shoot<br>
-    <b>M</b> music on/off &nbsp;·&nbsp; <b>Esc</b> pause &nbsp;·&nbsp; Stars bring police — on wheels and on foot. Break their line of sight to cool down.<br>
-    Ten golden cassettes are hidden around the city. Each one is cash in your pocket.
-  </p>
+<div id="startScreen" class="screen">
+  <h1>CORAL CITY HEAT</h1>
+  <p>You roll into Coral City with empty pockets and one contact: Lupe, a pawnbroker who always has work for someone who can drive. Run her jobs, dodge the Coral City PD, and own these streets by sundown.</p>
+  <div class="controls">
+    WASD / arrows — move &amp; drive · Mouse — look (click the game to lock) · Shift — run<br>
+    E — enter / exit vehicle · F or click — punch · Click / Q — shoot (once armed)<br>
+    Space — handbrake · T — answer phone · P — pause · M — mute
+  </div>
   <div>
-    <button class="btn" id="btn-start">START NEW GAME</button>
-    <button class="btn ghost hidden" id="btn-continue">CONTINUE</button>
+    <button id="startBtn" class="btn">START ENGINE</button>
+    <button id="continueBtn" class="btn secondary" style="display:none">CONTINUE</button>
   </div>
 </div>
 
-<div id="pause-screen" class="screen hidden">
-  <h1>PAUSED</h1>
-  <p class="tag" id="pause-stats"></p>
+<div id="pauseScreen" class="screen">
+  <h2>PAUSED</h2>
+  <p>The city waits for no one — except right now.</p>
+  <button id="resumeBtn" class="btn">RESUME</button>
+</div>
+
+<div id="bustedScreen" class="screen">
+  <h2>BUSTED</h2>
+  <p>Coral City PD got the cuffs on. You were fined and released outside the station.</p>
+  <button id="bustedBtn" class="btn">WALK OUT</button>
+</div>
+
+<div id="wastedScreen" class="screen">
+  <h2>WASTED</h2>
+  <p>You wake up at Coral General with a hospital bill and a headache.</p>
+  <button id="wastedBtn" class="btn">DISCHARGE ME</button>
+</div>
+
+<div id="failScreen" class="screen">
+  <h2>JOB FAILED</h2>
+  <p id="failText">The job went sideways.</p>
   <div>
-    <button class="btn" id="btn-resume">RESUME</button>
-    <button class="btn ghost" id="btn-quit">SAVE &amp; TITLE</button>
+    <button id="retryBtn" class="btn">RETRY JOB</button>
+    <button id="skipJobBtn" class="btn secondary">SKIP JOB</button>
   </div>
 </div>
 
-<div id="end-screen" class="screen hidden">
-  <h1 id="end-title">BUSTED</h1>
-  <p class="tag" id="end-text"></p>
-  <button class="btn" id="btn-respawn">CONTINUE FROM CHECKPOINT</button>
+<div id="clearedScreen" class="screen">
+  <h2>CITY CLEARED</h2>
+  <p>Every job done. Coral City runs on your schedule now — free roam the streets as long as you like.</p>
+  <p id="clearedStats"></p>
+  <button id="againBtn" class="btn">KEEP DRIVING</button>
 </div>
 
-<div id="clear-screen" class="screen hidden">
-  <h1>CITY CLEARED</h1>
-  <p class="tag">Every job done, every debt settled. Lupe raises a glass at the marina,
-    Sable puts your name on the dispatch wall, and Dex just nods. Coral City is yours.</p>
-  <p class="stats" id="clear-stats"></p>
-  <div>
-    <button class="btn" id="btn-freeroam">KEEP ROAMING</button>
-    <button class="btn ghost" id="btn-restart">RESTART STORY</button>
-  </div>
-</div>
-
-<noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#0d1420;font-family:sans-serif;padding:24px;text-align:center">Coral City Heat needs JavaScript — the whole city is generated in your browser.</div></noscript>
-<script type="importmap">
-{ "imports": { "three": "./vendor/three/three.module.min.js" } }
-</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

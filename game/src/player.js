@@ -1,105 +1,140 @@
-// Coral City Heat v2 — Marco himself: an articulated figure with human
-// proportions (longer legs, narrower shoulders, a head that sits right),
-// swinging arms and legs while he walks, a right arm that snaps out for a
-// punch or levels the pistol, a cap, and a soft blob shadow. Colours are the
-// story's: sunset shirt, dark jeans, no fear.
-// v2.1: the walk swing is now amplitude-smoothed, so stopping mid-stride
-// eases the limbs back to a neutral stance instead of freezing Marco in a
-// split step; the punch follows a fast-out / slower-back ease curve rather
-// than a linear snap that popped on its last frame.
+// player.js — the on-foot character: WASD movement with a smooth follow or
+// pointer-lock camera, procedural limb-swing walking, punches and a pistol.
 
 import * as THREE from 'three';
+import { buildPersonMesh, animatePerson } from './peds.js';
+import { clamp } from './rng.js';
 
-const mat = (color) => new THREE.MeshLambertMaterial({ color });
-
-export function createPlayerMesh() {
-  const group = new THREE.Group();
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.7, 0.3), mat(0xff7a59));
-  torso.position.y = 1.12;
-  group.add(torso);
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.1, 0.32), mat(0x3a2a18));
-  belt.position.y = 0.76;
-  group.add(belt);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 9), mat(0xc68863));
-  head.position.y = 1.68;
-  group.add(head);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.25, 0.11, 12), mat(0x22303f));
-  cap.position.y = 1.84;
-  group.add(cap);
-  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.24), mat(0x22303f));
-  brim.position.set(0, 1.8, 0.3);
-  group.add(brim);
-  const blob = new THREE.Mesh(
-    new THREE.CircleGeometry(0.58, 14),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.27, depthWrite: false }),
-  );
-  blob.rotation.x = -Math.PI / 2;
-  blob.position.y = 0.02;
-  group.add(blob);
-
-  function limb(w, h, d, color, x, y) {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, 0);
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
-    mesh.position.y = -h / 2;
-    pivot.add(mesh);
-    group.add(pivot);
-    return pivot;
+export class Player {
+  constructor(scene) {
+    this.mesh = buildPersonMesh(0xe8433c, 0xf2c9a0, 0x24303e);
+    // Coral shirt gets a gold chain for the cover shot.
+    const chain = new THREE.Mesh(
+      new THREE.TorusGeometry(0.2, 0.035, 6, 14),
+      new THREE.MeshBasicMaterial({ color: 0xffd23e })
+    );
+    chain.position.set(0, 1.32, 0.16);
+    chain.rotation.x = 0.5;
+    this.mesh.add(chain);
+    this.x = 8;
+    this.z = 14;
+    this.y = 0;
+    this.angle = Math.PI;
+    this.camYaw = Math.PI;
+    this.camPitch = 0.32;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.speedAbs = 0;
+    this.walkPhase = 0;
+    this.punchTime = 0;
+    this.hasGun = false;
+    this.inVehicle = null;
+    this.dead = false;
+    scene.add(this.mesh);
+    this.syncMesh();
   }
-  const legL = limb(0.19, 0.82, 0.23, 0x243447, -0.14, 0.8);
-  const legR = limb(0.19, 0.82, 0.23, 0x243447, 0.14, 0.8);
-  const armL = limb(0.15, 0.66, 0.19, 0xe8b48c, -0.35, 1.44);
-  const armR = limb(0.15, 0.66, 0.19, 0xe8b48c, 0.35, 1.44);
-  // Shirt sleeves over the upper arms, so the swing reads at distance.
-  for (const arm of [armL, armR]) {
-    const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.24, 0.23), mat(0xff7a59));
-    sleeve.position.set(0, -0.12, 0);
-    arm.add(sleeve);
+
+  get pos() {
+    return { x: this.x, z: this.z };
   }
-  // The pistol appears in the right hand once Job 2 is done.
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.16, 0.34), mat(0x17181c));
-  gun.position.set(0, -0.7, 0.14);
-  gun.visible = false;
-  armR.add(gun);
 
-  const PUNCH_TIME = 0.24;
-  let cycle = 0;
-  let punchT = 0;
-  let stepPhase = 0;
-  let swingAmp = 0; // smoothed 0..1 walk-swing amplitude
+  syncMesh() {
+    this.mesh.position.set(this.x, this.y, this.z);
+    this.mesh.rotation.y = this.angle;
+    this.mesh.visible = !this.inVehicle;
+  }
 
-  return {
-    group,
-    gun,
-    punch() { punchT = PUNCH_TIME; },
-    /** True on the frame a foot lands — the main loop plays a step sound. */
-    get stepped() {
-      const p = Math.floor(cycle / Math.PI);
-      if (p !== stepPhase) { stepPhase = p; return true; }
-      return false;
-    },
-    /** Animate: swing with speed, snap the right arm out while a punch is live. */
-    update(dt, speed) {
-      const targetAmp = Math.min(1, speed / 3);
-      swingAmp += (targetAmp - swingAmp) * Math.min(1, dt * 10);
-      cycle += dt * (2 + speed * 1.9) * Math.max(0.25, swingAmp);
-      const s = Math.sin(cycle) * 0.62 * swingAmp;
-      legL.rotation.x = s;
-      legR.rotation.x = -s;
-      armL.rotation.x = -s * 0.85;
-      if (punchT > 0) {
-        punchT = Math.max(0, punchT - dt);
-        // Ease: out in the first third, hold a beat, then recover.
-        const t = 1 - punchT / PUNCH_TIME; // 0 → 1 over the punch
-        const reach = t < 0.33 ? t / 0.33 : 1 - Math.max(0, (t - 0.55) / 0.45);
-        armR.rotation.x = -1.5 * Math.min(1, Math.max(0, reach));
-      } else if (gun.visible) {
-        // Armed and idle: keep the pistol arm half-raised, ready.
-        armR.rotation.x = s * 0.4 - 0.55;
-      } else {
-        armR.rotation.x = s * 0.85;
+  hurt(amount) {
+    if (this.dead) return;
+    this.hp = clamp(this.hp - amount, 0, this.maxHp);
+    if (this.hp <= 0) this.dead = true;
+  }
+
+  healFull() {
+    this.hp = this.maxHp;
+    this.dead = false;
+  }
+
+  update(dt, input, city, events) {
+    if (this.inVehicle) {
+      this.x = this.inVehicle.x;
+      this.z = this.inVehicle.z;
+      this.angle = this.inVehicle.angle;
+      this.speedAbs = Math.abs(this.inVehicle.speed);
+      this.syncMesh();
+      return;
+    }
+    // Camera yaw from mouse when pointer-locked, otherwise it eases behind.
+    if (input.locked) {
+      this.camYaw -= input.mouseDX * 0.0032;
+      this.camPitch = clamp(this.camPitch + input.mouseDY * 0.0026, 0.05, 1.1);
+    }
+    let mx = 0;
+    let mz = 0;
+    if (input.forward()) mz += 1;
+    if (input.back()) mz -= 1;
+    if (input.left()) mx -= 1;
+    if (input.right()) mx += 1;
+    const moving = mx !== 0 || mz !== 0;
+    const running = input.down('ShiftLeft') || input.down('ShiftRight');
+    const speed = running ? 8.2 : 4.4;
+    if (moving) {
+      const len = Math.sqrt(mx * mx + mz * mz);
+      mx /= len;
+      mz /= len;
+      const sin = Math.sin(this.camYaw);
+      const cos = Math.cos(this.camYaw);
+      const wx = mx * cos - mz * sin;
+      const wz = -mx * sin - mz * cos;
+      const oldX = this.x;
+      const oldZ = this.z;
+      this.x += wx * speed * dt * -1;
+      this.z += wz * speed * dt * -1;
+      void oldX; void oldZ;
+      this.angle = Math.atan2(-wx * -1, -wz * -1);
+      if (!input.locked) {
+        // Follow camera: ease yaw toward the movement direction.
+        let target = this.angle + Math.PI;
+        let diff = target - this.camYaw;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        this.camYaw += diff * Math.min(1, dt * 4);
       }
-      group.position.y = Math.abs(Math.sin(cycle)) * 0.05 * swingAmp;
-    },
-  };
+      this.walkPhase += dt * speed * 2.1;
+      this.speedAbs = speed;
+      events.push({ type: 'step', dist: speed * dt, running });
+    } else {
+      this.speedAbs = 0;
+    }
+    const [cx, cz] = city.collideCircle(this.x, this.z, 0.55);
+    this.x = cx;
+    this.z = cz;
+
+    if (this.punchTime > 0) this.punchTime -= dt;
+    if (input.hit('KeyF') || input.clicked) {
+      if (this.hasGun && input.clicked) {
+        events.push({ type: 'shoot', x: this.x, z: this.z, angle: this.angle });
+      } else if (this.punchTime <= 0) {
+        this.punchTime = 0.32;
+        events.push({ type: 'punch', x: this.x, z: this.z, angle: this.angle });
+      }
+    }
+    if (input.hit('KeyQ') && this.hasGun) {
+      events.push({ type: 'shoot', x: this.x, z: this.z, angle: this.angle });
+    }
+    this.syncMesh();
+    animatePerson(this.mesh, this.walkPhase, this.speedAbs / 5, Math.max(0, this.punchTime));
+  }
+
+  cameraPose() {
+    // Third-person camera behind the player using camYaw / camPitch.
+    const dist = 8.5;
+    const cx = this.x + Math.sin(this.camYaw) * Math.cos(this.camPitch) * dist;
+    const cz = this.z + Math.cos(this.camYaw) * Math.cos(this.camPitch) * dist;
+    const cy = 2 + Math.sin(this.camPitch) * dist;
+    return {
+      pos: { x: cx, y: cy, z: cz },
+      look: { x: this.x, y: 1.4, z: this.z },
+    };
+  }
 }
